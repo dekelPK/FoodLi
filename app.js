@@ -63,7 +63,18 @@
   let store = null;            // { save(id, blob), remove(id) }
   let photoNote = "";
 
-  if (!CLOUD_CONFIG) setBook(window.BOOK || { title: "FoodLi", subtitle: "ספר המתכונים שלי" }, Array.isArray(window.RECIPES) ? window.RECIPES : []);
+  // Books built into the site (no accounts): recipes.js, plus any extra book files such as friend.js
+  const staticBooks = CLOUD_CONFIG ? [] : [
+    { id: "main", book: window.BOOK || { title: "FoodLi", subtitle: "ספר המתכונים שלי" }, recipes: window.RECIPES },
+    { id: "friend", book: window.FRIEND_BOOK, recipes: window.FRIEND_RECIPES }
+  ].filter(b => b.book && Array.isArray(b.recipes));
+  const multiBook = staticBooks.length > 1;
+  const hasShelf = !!CLOUD_CONFIG || multiBook;
+  let myBookId = null;         // which built-in book belongs to whoever uses this phone
+  try { myBookId = localStorage.getItem("foodli-me"); } catch (e) { /* ignore */ }
+  if (!staticBooks.some(b => b.id === myBookId)) myBookId = null;
+
+  if (!CLOUD_CONFIG) setBook(staticBooks[0].book, staticBooks[0].recipes);
 
   async function initClaudeStore() {
     const [db, assets] = await Promise.all([window.claude.use("db"), window.claude.use("assets")]);
@@ -110,8 +121,8 @@
         v ? s.put(v, id) : s.delete(id);
         t.oncomplete = res; t.onerror = () => rej(t.error);
       });
-      canUpload = true;
-      photoNote = "התמונות נשמרות בדפדפן הזה בלבד.";
+      canUpload = !multiBook || (openBookId !== null && openBookId === myBookId);
+      photoNote = "התמונה נשמרת רק בטלפון הזה.";
       store = {
         async save(id, blob) { await put(id, blob); photos[id] = URL.createObjectURL(blob); },
         async remove(id) { await put(id, null); const r = recipes.find(x => x.id === id); if (r && r.photo) photos[id] = r.photo; else delete photos[id]; }
@@ -220,7 +231,7 @@
         <span class="cover-eyebrow">${esc(BOOK.subtitle || "")}</span>
         <h1 class="${[...String(BOOK.title || "")].length > 7 ? "long" : ""}">${esc(BOOK.title)}</h1>
         <div class="cover-stickers">${stickers}</div>
-        <p class="cover-count">${recipes.length} מתכונים שאני אוהבת</p>
+        <p class="cover-count">${recipes.length ? `${recipes.length} מתכונים שאני אוהבת` : "הספר מחכה למתכון הראשון"}</p>
         <button class="sticker-btn primary big" type="button" data-go="1">לפתוח את הספר</button>
       </div>
     </section>`;
@@ -350,7 +361,7 @@
     $("story-modal").hidden = true;
     if (view === "loading") stage.innerHTML = `<p class="loading-page">${esc(loadingText)}</p>`;
     else if (view === "login") stage.innerHTML = loginHTML();
-    else if (view === "shelf") stage.innerHTML = shelfHTML();
+    else if (view === "shelf") stage.innerHTML = CLOUD_CONFIG ? shelfHTML() : staticShelfHTML();
     else stage.innerHTML = wideMQ.matches ? buildWide(idx) : buildNarrow(idx);
     updateControls();
   }
@@ -358,7 +369,7 @@
   function updateControls() {
     const inBook = view === "book";
     $("controls").hidden = !inBook;
-    $("go-shelf").hidden = !CLOUD_CONFIG || view !== "book";
+    $("go-shelf").hidden = !hasShelf || view !== "book";
     $("go-cover").disabled = !inBook;
     if (!inBook) { $("go-toc").hidden = true; document.body.className = "ch-0"; return; }
     $("prev").disabled = current === 0;
@@ -859,7 +870,7 @@
   }
 
   async function showShelf(refresh) {
-    if (refresh && cloud) { try { shelf = await cloud.listBooks(); } catch (e) { /* show what we have */ } }
+    if (refresh && CLOUD_CONFIG && cloud) { try { shelf = await cloud.listBooks(); } catch (e) { /* show what we have */ } }
     view = "shelf"; openBookId = null; render(0); setHash();
     window.scrollTo({ top: 0 });
   }
@@ -1129,7 +1140,70 @@
       if (e.target.id === "recipe-form") saveRecipeForm(e.target);
       else if (e.target.id === "book-form") saveBookForm(e.target);
     });
-    $("go-shelf").addEventListener("click", () => showShelf(true));
+  }
+
+
+  // ======================================================
+  //  Shelf of books built into the site (no accounts)
+  // ======================================================
+  function staticShelfHTML() {
+    const books = staticBooks.slice().sort((a, b) => (b.id === myBookId) - (a.id === myBookId));
+    const card = b => `<button type="button" class="shelf-book ch-${(b.book.color || 0) % 6}" data-open-book="${esc(b.id)}">
+        ${b.id === myBookId ? `<span class="own-tag">הספר שלי</span>` : ""}
+        <span class="shelf-title">${esc(b.book.title || "")}</span>
+        ${b.book.ownerName && b.book.ownerName !== b.book.title ? `<span class="shelf-owner">${esc(b.book.ownerName)}</span>` : ""}
+        <span class="shelf-count">${b.recipes.length} מתכונים</span>
+      </button>`;
+    const who = b => b.book.ownerName || b.book.title;
+    return `<section class="page sheet shelf fade">
+      <div class="page-inner">
+        <h2 class="display shelf-head">מדף הספרים</h2>
+        ${myBookId
+          ? `<p class="note-hand">כאן הספר שלך והספר של החברה. לוחצים על ספר כדי לפתוח אותו</p>`
+          : `<div class="who-am-i"><p class="note-hand">רגע לפני שמתחילים: מי את?</p>
+              <div class="who-buttons">${staticBooks.map(b => `<button class="sticker-btn primary" type="button" data-pick-me="${esc(b.id)}">${esc(who(b))}</button>`).join("")}</div></div>`}
+        <div class="shelf-grid">${books.map(card).join("")}</div>
+        ${myBookId ? `<div class="shelf-foot"><span class="me-line">הספר שלך בטלפון הזה: ${esc(who(staticBooks.find(b => b.id === myBookId)))}</span>
+          <button class="sticker-btn small" type="button" data-action="change-me">זה לא הספר שלי</button></div>` : ""}
+      </div>
+    </section>`;
+  }
+
+  function openStaticBook(id, fromHash) {
+    const b = staticBooks.find(x => x.id === id); if (!b) return;
+    openBookId = id;
+    setBook(b.book, b.recipes, true);   // local photos are keyed by recipe id, keep them all
+    canUpload = !!store && id === myBookId;
+    try { localStorage.setItem("foodli-book", id); } catch (e) { /* ignore */ }
+    view = "book"; query = ""; activeChapter = "";
+    current = fromHash ? unitFromHash() : 0;
+    render(current); setHash();
+    window.scrollTo({ top: 0 });
+  }
+
+  function startShelf() {
+    let last = null;
+    try { last = localStorage.getItem("foodli-book"); } catch (e) { /* ignore */ }
+    if (location.hash && myBookId && staticBooks.some(b => b.id === last)) openStaticBook(last, true);
+    else showShelf(false);
+  }
+
+  function handleShelfClick(e) {
+    const pick = e.target.closest("[data-pick-me]");
+    if (pick) {
+      myBookId = pick.dataset.pickMe;
+      try { localStorage.setItem("foodli-me", myBookId); } catch (err) { /* ignore */ }
+      render(0); return true;
+    }
+    const ch = e.target.closest('[data-action="change-me"]');
+    if (ch) {
+      myBookId = null;
+      try { localStorage.removeItem("foodli-me"); } catch (err) { /* ignore */ }
+      render(0); return true;
+    }
+    const ob = e.target.closest("[data-open-book]");
+    if (ob) { openStaticBook(ob.dataset.openBook, false); return true; }
+    return false;
   }
 
   // ---------- events ----------
@@ -1141,6 +1215,7 @@
 
   stage.addEventListener("click", async e => {
     if (CLOUD_CONFIG && await handleCloudClick(e)) return;
+    if (multiBook && handleShelfClick(e)) return;
     const g = e.target.closest("[data-go]");
     if (g) { go(+g.dataset.go); return; }
     const story = e.target.closest("[data-story]");
@@ -1216,6 +1291,8 @@
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 
+  $("go-shelf").addEventListener("click", () => showShelf(true));
   if (CLOUD_CONFIG) startCloud();
+  else if (multiBook) startShelf();
   else { current = unitFromHash(); render(current); }
 })();

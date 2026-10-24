@@ -360,6 +360,8 @@ body::before {
 
 .auth { max-width: 460px; align-self: flex-start; }
 .shelf { align-self: flex-start; }
+.who-am-i { display: flex; flex-direction: column; gap: 10px; background: var(--c-tint); border: 2px dashed var(--c); border-radius: 16px; padding: 14px 16px; }
+.who-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 .auth-title { font-size: clamp(4rem, 20vw, 5.6rem); }
 .auth-form, .editor { display: flex; flex-direction: column; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: 0; padding: 0; margin: 0; }
