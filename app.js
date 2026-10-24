@@ -192,7 +192,7 @@
     const url = photos[r.id];
     const controls = canUpload
       ? (url
-        ? `<div class="photo-tools"><button type="button" class="mini-btn" data-photo-pick="${esc(r.id)}">החלפה</button><button type="button" class="mini-btn" data-photo-remove="${esc(r.id)}">הסרה</button></div>`
+        ? `<div class="photo-tools"><button type="button" class="mini-btn" data-photo-pick="${esc(r.id)}">החלפה</button>${url !== r.photo ? `<button type="button" class="mini-btn" data-photo-remove="${esc(r.id)}">הסרה</button>` : ""}</div>`
         : "")
       : "";
     const inner = url
