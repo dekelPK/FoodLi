@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FoodLi</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="theme-color" content="#2f3328">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amatic+SC:wght@700&family=Assistant:wght@400;600;700&family=Frank+Ruhl+Libre:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" dir="rtl" lang="he">
+  <header class="topbar">
+    <button class="topbar-title" id="go-cover" type="button" aria-label="לכריכה"></button>
+    <button class="chip-btn" id="go-toc" type="button">תוכן עניינים</button>
+  </header>
+
+  <main class="stage" id="stage" aria-live="polite"></main>
+
+  <nav class="controls" aria-label="דפדוף">
+    <button class="nav-btn" id="prev" type="button" aria-label="עמוד קודם"><span aria-hidden="true">→</span><span class="nav-label">הקודם</span></button>
+    <div class="controls-mid">
+      <span class="folio" id="folio"></span>
+      <button class="chip-btn" id="wake" type="button" aria-pressed="false" hidden>להשאיר מסך דולק</button>
+    </div>
+    <button class="nav-btn" id="next" type="button" aria-label="עמוד הבא"><span class="nav-label">הבא</span><span aria-hidden="true">←</span></button>
+  </nav>
+</div>
+<script src="recipes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
