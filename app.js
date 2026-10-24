@@ -465,27 +465,95 @@
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
-  async function makeStory(r) {
-    const W = 1080, H = 1920;
-    const color = CH_COLORS[chIndex(r.category)];
-    try {
-      await Promise.all(["700 120px Karantina", "700 60px 'Amatic SC'", "600 40px Assistant", "800 40px Assistant"].map(f => document.fonts.load(f)));
-    } catch (e) { /* fall back to system fonts */ }
-    const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const STORY_W = 1080, STORY_H = 1920, STORY_FOOTER = 170, INK = "#2a2234";
+
+  async function storyFonts() {
+    try { await Promise.all(["700 120px Karantina", "700 60px 'Amatic SC'", "600 40px Assistant", "800 40px Assistant"].map(f => document.fonts.load(f))); }
+    catch (e) { /* fall back to system fonts */ }
+  }
+
+  // a blank story: gingham tablecloth + the book name on top
+  function storyCanvas(color) {
+    const cv = document.createElement("canvas"); cv.width = STORY_W; cv.height = STORY_H;
     const ctx = cv.getContext("2d");
     ctx.direction = "rtl";
-
-    // gingham tablecloth
-    ctx.fillStyle = "#fffaf4"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#fffaf4"; ctx.fillRect(0, 0, STORY_W, STORY_H);
     ctx.globalAlpha = 0.16; ctx.fillStyle = color;
-    for (let x = 0; x < W; x += 96) ctx.fillRect(x, 0, 48, H);
-    for (let y = 0; y < H; y += 96) ctx.fillRect(0, y, W, 48);
+    for (let x = 0; x < STORY_W; x += 96) ctx.fillRect(x, 0, 48, STORY_H);
+    for (let y = 0; y < STORY_H; y += 96) ctx.fillRect(0, y, STORY_W, 48);
     ctx.globalAlpha = 1;
+    ctx.textAlign = "center"; ctx.fillStyle = INK; ctx.font = "700 64px Karantina, sans-serif";
+    ctx.fillText(BOOK.title || "", STORY_W / 2, 120);
+    return { cv, ctx };
+  }
 
-    // brand
-    ctx.textAlign = "center"; ctx.fillStyle = "#2a2234";
-    ctx.font = "700 64px Karantina, sans-serif";
-    ctx.fillText(BOOK.title, W / 2, 120);
+  // footer, plus page dots when the story has several images
+  function storyFinish(ctx, color, page, total) {
+    if (total > 1) {
+      const gap = 34, x0 = STORY_W / 2 + (total - 1) * gap / 2;
+      for (let i = 0; i < total; i++) {
+        ctx.beginPath(); ctx.arc(x0 - i * gap, STORY_H - 150, 10, 0, Math.PI * 2);
+        ctx.fillStyle = i === page ? color : "rgba(42,34,52,.22)"; ctx.fill();
+      }
+    }
+    ctx.textAlign = "center"; ctx.fillStyle = INK; ctx.font = "700 56px 'Amatic SC', sans-serif";
+    ctx.fillText("מתוך ספר המתכונים שלי · " + (BOOK.title || ""), STORY_W / 2, STORY_H - 70);
+    return new Promise(res => ctx.canvas.toBlob(b => res(b), "image/png"));
+  }
+
+  // a white card with a marker-underlined heading
+  function storyCard(ctx, color, x, y, w, h, heading) {
+    ctx.save(); ctx.shadowColor = "rgba(40,30,50,.12)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10;
+    ctx.fillStyle = "#ffffff"; roundRect(ctx, x, y, w, h, 36); ctx.fill(); ctx.restore();
+    ctx.textAlign = "right"; ctx.fillStyle = INK; ctx.font = "700 84px Karantina, sans-serif";
+    const hw = ctx.measureText(heading).width;
+    ctx.fillText(heading, x + w - 56, y + 104);
+    ctx.fillStyle = color; ctx.fillRect(x + w - 56 - hw, y + 116, hw, 10);
+  }
+
+  // numbered steps: measure (draw = false) or draw them from `top`
+  const STEP_NUM = 64;
+  function stepBlocks(ctx, steps, size, width) {
+    ctx.font = `600 ${size}px Assistant, sans-serif`;
+    const lh = size * 1.34;
+    return steps.map(t => { const lines = wrapLines(ctx, t, width - STEP_NUM); return { lines, h: Math.max(lines.length * lh, 56) + size * 0.55 }; });
+  }
+  function drawSteps(ctx, color, blocks, startNo, size, xr, top) {
+    const lh = size * 1.34; let yy = top;
+    blocks.forEach((b, i) => {
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(xr - 24, yy + 26, 26, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.font = "700 40px Karantina, sans-serif";
+      ctx.fillText(String(startNo + i), xr - 24, yy + 40);
+      ctx.fillStyle = INK; ctx.textAlign = "right"; ctx.font = `600 ${size}px Assistant, sans-serif`;
+      b.lines.forEach((l, k) => ctx.fillText(l, xr - STEP_NUM, yy + size + k * lh));
+      yy += b.h;
+    });
+  }
+
+  function drawStickyNote(ctx, color, text, cx, y, w) {
+    ctx.font = "700 56px 'Amatic SC', sans-serif";
+    const lines = wrapLines(ctx, text, w - 80).slice(0, 4);
+    const h = lines.length * 60 + 70;
+    ctx.save(); ctx.translate(cx, y + h / 2); ctx.rotate(0.03);
+    ctx.shadowColor = "rgba(40,30,0,.25)"; ctx.shadowBlur = 24; ctx.shadowOffsetY = 12;
+    ctx.fillStyle = "#fff0a3"; ctx.fillRect(-w / 2, -h / 2, w, h); ctx.shadowColor = "transparent";
+    ctx.globalAlpha = 0.8; ctx.fillStyle = color; ctx.fillRect(-60, -h / 2 - 16, 120, 34); ctx.globalAlpha = 1;
+    ctx.fillStyle = "#3a3020"; ctx.textAlign = "center";
+    lines.forEach((l, i) => ctx.fillText(l, 0, -h / 2 + 78 + i * 60));
+    ctx.restore();
+    return h;
+  }
+
+  // Story images for a recipe: the first has the photo, title and ingredients;
+  // the preparation steps follow (on the same image when they fit, otherwise on more images)
+  async function makeStories(r) {
+    const W = STORY_W, H = STORY_H, footer = STORY_FOOTER;
+    const color = CH_COLORS[chIndex(r.category)];
+    await storyFonts();
+    const steps = (r.steps || []).map(s => String(s).trim()).filter(Boolean);
+    const tips = tipsOf(r).map(String).filter(Boolean);
+    const first = storyCanvas(color);
+    const ctx = first.ctx;
 
     let y = 170;
     const items = (r.ingredients || []).map(s => String(s).trim()).filter(s => s && !isSub(s));
@@ -501,7 +569,7 @@
       const k = Math.max(iw / img.naturalWidth, ih / img.naturalHeight);
       const sw = iw / k, sh = ih / k;
       ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, ix, iy, iw, ih);
-      ctx.fillStyle = "#2a2234"; ctx.font = "700 58px 'Amatic SC', sans-serif";
+      ctx.fillStyle = INK; ctx.textAlign = "center"; ctx.font = "700 58px 'Amatic SC', sans-serif";
       ctx.fillText(r.title, W / 2, y + ph - 40);
       ctx.restore();
       // washi tape
@@ -520,7 +588,7 @@
     const headH = titleLines.length * titleSize * 0.85 + 20 + (metaLine ? 70 : 0) + 50;
 
     // ingredients layout (measured first so the card hugs its content)
-    const cardX = 90, cardW = W - 180, footer = 150, pad = 210;
+    const cardX = 90, cardW = W - 180, pad = 210, cardGap = 40;
     const maxH = H - footer - y - headH - pad;
     let colW = 0;
     const layout = (size, cols, truncate) => {
@@ -551,9 +619,21 @@
       if (!L) L = layout(30, 2, true);
     }
     const cardH = L ? pad + L.used : 0;
-    if (!img) y = 170 + Math.max(0, (H - footer - 170 - headH - cardH) / 2);
 
-    ctx.fillStyle = "#2a2234"; ctx.textAlign = "center";
+    // do the steps fit under the ingredients on this same image?
+    const stepsW = cardW - 112;
+    let inline = null;
+    if (steps.length) {
+      const room = H - footer - (img ? y : 170) - headH - (cardH ? cardH + cardGap : 0) - 210;
+      for (let fs = 38; fs >= 34 && !inline; fs -= 2) {
+        const blocks = stepBlocks(ctx, steps, fs, stepsW);
+        const used = blocks.reduce((a, b) => a + b.h, 0);
+        if (used <= room) inline = { blocks, size: fs, h: 210 + used };
+      }
+    }
+    if (!img) y = 170 + Math.max(0, (H - footer - 170 - headH - cardH - (inline ? cardGap + inline.h : 0)) / 2);
+
+    ctx.fillStyle = INK; ctx.textAlign = "center";
     ctx.font = `700 ${titleSize}px Karantina, sans-serif`;
     titleLines.forEach(l => { y += titleSize * 0.85; ctx.fillText(l, W / 2, y); });
     y += 20;
@@ -561,64 +641,110 @@
     y += 50;
 
     if (L) {
-      ctx.save(); ctx.shadowColor = "rgba(40,30,50,.12)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10;
-      ctx.fillStyle = "#ffffff"; roundRect(ctx, cardX, y, cardW, cardH, 36); ctx.fill(); ctx.restore();
-      ctx.textAlign = "right"; ctx.fillStyle = "#2a2234"; ctx.font = "700 84px Karantina, sans-serif";
-      const hw = ctx.measureText("מה צריך").width;
-      ctx.fillText("מה צריך", cardX + cardW - 56, y + 104);
-      ctx.fillStyle = color; ctx.fillRect(cardX + cardW - 56 - hw, y + 116, hw, 10);
+      storyCard(ctx, color, cardX, y, cardW, cardH, "מה צריך");
       const top = y + 170;
       L.colsOut.forEach((col, ci) => {
         const xr = cardX + cardW - 56 - ci * (colW + 40);
         let yy = top;
         col.forEach(ls => {
           ctx.fillStyle = color; ctx.beginPath(); ctx.arc(xr - 8, yy + L.size * 0.62, 7, 0, Math.PI * 2); ctx.fill();
-          ctx.fillStyle = "#2a2234"; ctx.font = `600 ${L.size}px Assistant, sans-serif`;
+          ctx.fillStyle = INK; ctx.font = `600 ${L.size}px Assistant, sans-serif`;
           ls.forEach(l => { ctx.fillText(l, xr - 30, yy + L.size); yy += L.lh; });
           yy += L.size * 0.35;
         });
       });
+      y += cardH + cardGap;
     }
-    // footer
-    ctx.textAlign = "center"; ctx.fillStyle = "#2a2234"; ctx.font = "700 56px 'Amatic SC', sans-serif";
-    ctx.fillText("מתוך ספר המתכונים שלי · " + BOOK.title, W / 2, H - 70);
+    if (inline) {
+      storyCard(ctx, color, cardX, y, cardW, inline.h, "איך מכינים");
+      drawSteps(ctx, color, inline.blocks, 1, inline.size, cardX + cardW - 56, y + 170);
+    }
 
-    return new Promise(res => cv.toBlob(b => res(b), "image/png"));
+    // more images for the steps, split into pages
+    const pages = [];
+    if (steps.length && !inline) {
+      const top = 380, room = H - footer - 60 - top - 210;
+      let size = 38, blocks = stepBlocks(ctx, steps, size, stepsW);
+      const paginate = (bs, cap) => { const out = [[]]; let h = 0; bs.forEach((b, i) => { if (h + b.h > cap && out[out.length - 1].length) { out.push([]); h = 0; } out[out.length - 1].push(i); h += b.h; }); return out; };
+      let split = paginate(blocks, room);
+      if (split.length > 2) { size = 34; blocks = stepBlocks(ctx, steps, size, stepsW); split = paginate(blocks, room); }
+      // balance the pages so the last one isn't nearly empty
+      const total = blocks.reduce((a, b2) => a + b2.h, 0);
+      for (let cap = total / split.length; cap < room; cap *= 1.05) {
+        const s2 = paginate(blocks, cap);
+        if (s2.length === split.length) { split = s2; break; }
+      }
+      split.forEach(idx => pages.push({ blocks: idx.map(i => blocks[i]), start: idx[0] + 1, size }));
+    }
+
+    const total = 1 + pages.length;
+    const out = [await storyFinish(ctx, color, 0, total)];
+    for (let p = 0; p < pages.length; p++) {
+      const pg = pages[p];
+      const { ctx: c } = storyCanvas(color);
+      c.fillStyle = INK; c.textAlign = "center"; c.font = "700 110px Karantina, sans-serif";
+      const tl = wrapLines(c, r.title, W - 160).slice(0, 1)[0] || "";
+      c.fillText(tl, W / 2, 260);
+      c.fillStyle = color; c.font = "700 60px 'Amatic SC', sans-serif";
+      c.fillText(pages.length > 1 ? `אופן ההכנה · ${p + 1} מתוך ${pages.length}` : "אופן ההכנה", W / 2, 330);
+      const used = pg.blocks.reduce((a, b) => a + b.h, 0);
+      const ch = 210 + used;
+      storyCard(c, color, cardX, 380, cardW, ch, "איך מכינים");
+      drawSteps(c, color, pg.blocks, pg.start, pg.size, cardX + cardW - 56, 380 + 170);
+      // a tip on the last page when there is room
+      if (p === pages.length - 1 && tips.length) {
+        const ty = 380 + ch + 70;
+        if (H - footer - 60 - ty > 230) drawStickyNote(c, color, tips[0], W / 2, ty, 760);
+      }
+      out.push(await storyFinish(c, color, p + 1, total));
+    }
+    return out;
   }
 
-  let storyBlob = null, storyRecipe = null, storyUrl = null;
+  let storyBlobs = [], storyRecipe = null, storyUrls = [];
   async function openStory(id) {
     const r = recipes.find(x => x.id === id); if (!r) return;
-    storyRecipe = r; storyBlob = null;
+    storyRecipe = r; storyBlobs = [];
     const modal = $("story-modal");
-    $("story-preview").innerHTML = `<span class="loading">מכינה את התמונה…</span>`;
+    $("story-preview").innerHTML = `<span class="loading">מכינה את התמונות…</span>`;
     $("story-status").textContent = "";
+    $("story-hint").textContent = "";
     $("story-save").disabled = true;
     modal.hidden = false;
     $("story-close").focus();
-    storyBlob = await makeStory(r);
-    if (storyUrl) URL.revokeObjectURL(storyUrl);
-    storyUrl = URL.createObjectURL(storyBlob);
-    $("story-preview").innerHTML = `<img src="${storyUrl}" alt="סטורי של ${esc(r.title)}">`;
+    storyBlobs = await makeStories(r);
+    storyUrls.forEach(u => URL.revokeObjectURL(u));
+    storyUrls = storyBlobs.map(b => URL.createObjectURL(b));
+    const n = storyUrls.length;
+    $("story-preview").innerHTML = storyUrls.map((u, i) => `<img src="${u}" alt="סטורי של ${esc(r.title)}${n > 1 ? `, תמונה ${i + 1} מתוך ${n}` : ""}">`).join("");
+    $("story-preview").classList.toggle("multi", n > 1);
+    $("story-hint").textContent = n > 1
+      ? `הסטורי יוצא ב־${n} תמונות. מחליקים כדי לראות את כולן, ומעלים אותן לסטורי לפי הסדר.`
+      : "אפשר גם ללחוץ לחיצה ארוכה על התמונה כדי לשמור אותה.";
     $("story-save").disabled = false;
   }
 
   async function saveStory() {
-    if (!storyBlob) return;
-    const filename = `${storyRecipe.id}-story.png`;
+    if (!storyBlobs.length) return;
+    const n = storyBlobs.length;
+    const name = i => `${storyRecipe.id}-story${n > 1 ? "-" + (i + 1) : ""}.png`;
     const status = $("story-status");
     const downloads = window.claude && window.claude.use ? await window.claude.use("downloads") : null;
     if (downloads) {
-      try { await downloads.save({ filename, data: storyBlob }); status.textContent = "נשמר. עכשיו אפשר להעלות אותו לסטורי."; }
-      catch (e) { status.textContent = e && e.code === "declined" ? "" : "לא הצלחתי לשמור כאן. לחיצה ארוכה על התמונה תשמור אותה."; }
+      let saved = 0;
+      for (let i = 0; i < n; i++) {
+        try { await downloads.save({ filename: name(i), data: storyBlobs[i] }); saved++; }
+        catch (e) { if (e && e.code === "declined") break; status.textContent = "לא הצלחתי לשמור כאן. לחיצה ארוכה על תמונה תשמור אותה."; return; }
+      }
+      if (saved) status.textContent = saved === n ? (n > 1 ? "כל התמונות נשמרו. עכשיו אפשר להעלות אותן לסטורי." : "נשמר. עכשיו אפשר להעלות אותו לסטורי.") : `נשמרו ${saved} מתוך ${n} תמונות.`;
       return;
     }
-    const file = new File([storyBlob], filename, { type: "image/png" });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: storyRecipe.title }); return; } catch (e) { if (e && e.name === "AbortError") return; }
+    const files = storyBlobs.map((b, i) => new File([b], name(i), { type: "image/png" }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files, title: storyRecipe.title }); return; } catch (e) { if (e && e.name === "AbortError") return; }
     }
-    const a = document.createElement("a"); a.href = storyUrl; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-    status.textContent = "התמונה ירדה למכשיר.";
+    storyUrls.forEach((u, i) => { const a = document.createElement("a"); a.href = u; a.download = name(i); document.body.appendChild(a); a.click(); a.remove(); });
+    status.textContent = n > 1 ? "התמונות ירדו למכשיר." : "התמונה ירדה למכשיר.";
   }
 
   function closeStory() { $("story-modal").hidden = true; }
