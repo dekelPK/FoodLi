@@ -347,7 +347,7 @@ window.RECIPES = [
   {
     id: "megulgalot",
     title: "מגולגלות",
-    category: "מאפים",
+    category: "עוגיות",
     ingredients: [
       "לבצק:",
       "קילו קמח",
