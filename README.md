@@ -14,4 +14,6 @@
 ## צפייה
 
 - מקומית: פותחים את `index.html` בדפדפן.
-- באינטרנט: Settings → Pages → Deploy from a branch → `master` / root.
+- באינטרנט (GitHub Pages): Settings → Pages → Source: Deploy from a branch → Branch: `master`, תיקייה `/ (root)` → Save. אחרי דקה־שתיים האתר זמין בכתובת https://dekelpk.github.io/FoodLi/
+- הוספה למסך הבית: באייפון פותחים את הכתובת ב־Safari, לוחצים על כפתור השיתוף ואז "הוספה למסך הבית". באנדרואיד ב־Chrome: תפריט ⋮ ואז "הוספה למסך הבית".
+- אחרי עדכון מתכונים, כדי לראות את השינוי באפליקציה במסך הבית צריך לפתוח אותה פעמיים (בפעם הראשונה היא מורידה את העדכון ברקע).

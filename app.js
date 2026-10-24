@@ -662,6 +662,11 @@
     document.addEventListener("visibilitychange", () => { if (!document.hidden && wakeBtn.getAttribute("aria-pressed") === "true") acquire(); });
   }
 
+  // offline support when running as a regular website (not inside claude.ai)
+  if ("serviceWorker" in navigator && location.protocol === "https:" && !window.claude) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
   current = unitFromHash();
   render(current);
 })();
