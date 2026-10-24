@@ -42,6 +42,7 @@
   let me = null;               // signed-in user (shared books only)
   let openBookId = null;
   const isOwn = () => !!(CLOUD_CONFIG && me && openBookId === me.uid);
+  const countLabel = n => n === 1 ? "מתכון אחד" : `${n} מתכונים`;
   const isSub = l => String(l).trim().endsWith(":");
   const countIngredients = r => (r.ingredients || []).filter(l => !isSub(l)).length;
   const tipsOf = r => Array.isArray(r.tips) ? r.tips : (r.tips ? [r.tips] : []);
@@ -249,7 +250,7 @@
         <span class="cover-eyebrow">${esc(BOOK.subtitle || "")}</span>
         <h1 class="${[...String(BOOK.title || "")].length > 7 ? "long" : ""}">${esc(BOOK.title)}</h1>
         <div class="cover-stickers">${stickers}</div>
-        <p class="cover-count">${recipes.length ? `${recipes.length} מתכונים שאני אוהבת` : "הספר מחכה למתכון הראשון"}</p>
+        <p class="cover-count">${recipes.length ? `${countLabel(recipes.length)} שאני אוהבת` : "הספר מחכה למתכון הראשון"}</p>
         <button class="sticker-btn primary big" type="button" data-go="1">לפתוח את הספר</button>
       </div>
     </section>`;
@@ -841,7 +842,7 @@
         ${own ? `<span class="own-tag">הספר שלי</span>` : ""}
         <span class="shelf-title">${esc(b.title || "")}</span>
         ${b.ownerName && b.ownerName !== b.title ? `<span class="shelf-owner">${esc(b.ownerName)}</span>` : ""}
-        <span class="shelf-count">${b.recipeCount || 0} מתכונים</span>
+        <span class="shelf-count">${countLabel(b.recipeCount || 0)}</span>
       </button>`;
     return `<section class="page sheet shelf fade">
       <div class="page-inner">
@@ -1173,7 +1174,7 @@
         ${b.id === myBookId ? `<span class="own-tag">הספר שלי</span>` : ""}
         <span class="shelf-title">${esc(b.book.title || "")}</span>
         ${b.book.ownerName && b.book.ownerName !== b.book.title ? `<span class="shelf-owner">${esc(b.book.ownerName)}</span>` : ""}
-        <span class="shelf-count">${b.recipes.length} מתכונים</span>
+        <span class="shelf-count">${countLabel(b.recipes.length)}</span>
       </button>`;
     const who = b => b.book.ownerName || b.book.title;
     return `<section class="page sheet shelf fade">
