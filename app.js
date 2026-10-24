@@ -1159,7 +1159,7 @@
       <div class="page-inner">
         <h2 class="display shelf-head">מדף הספרים</h2>
         ${myBookId
-          ? `<p class="note-hand">כאן הספר שלך והספר של החברה. לוחצים על ספר כדי לפתוח אותו</p>`
+          ? `<p class="note-hand">כאן הספר שלך ${staticBooks.filter(b => b.id !== myBookId).map(b => `והספר של ${esc(who(b))}`).join(" ")}. לוחצים על ספר כדי לפתוח אותו</p>`
           : `<div class="who-am-i"><p class="note-hand">רגע לפני שמתחילים: מי את?</p>
               <div class="who-buttons">${staticBooks.map(b => `<button class="sticker-btn primary" type="button" data-pick-me="${esc(b.id)}">${esc(who(b))}</button>`).join("")}</div></div>`}
         <div class="shelf-grid">${books.map(card).join("")}</div>
@@ -1211,7 +1211,7 @@
   $("next").addEventListener("click", () => go(current + 1));
   $("go-toc").addEventListener("click", () => go(1));
   $("go-cover").addEventListener("click", () => go(0));
-  $("go-cover").textContent = CLOUD_CONFIG ? "FoodLi" : BOOK.title;
+  $("go-cover").textContent = hasShelf ? "FoodLi" : BOOK.title;
 
   stage.addEventListener("click", async e => {
     if (CLOUD_CONFIG && await handleCloudClick(e)) return;
