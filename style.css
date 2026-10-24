@@ -189,6 +189,12 @@ h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; line-
   padding: 10px 14px; border-inline-start: 3px solid var(--saffron);
 }
 
+.video-link {
+  align-self: flex-start; color: var(--paper); background: var(--olive);
+  border-radius: 999px; padding: 8px 18px; font-weight: 700; text-decoration: none;
+}
+.source { margin: 0; font-size: 0.8rem; color: var(--ink-soft); }
+
 /* table of contents */
 .toc-head { display: flex; flex-direction: column; gap: 10px; }
 .toc-head h2 { font-size: 2rem; font-weight: 900; }

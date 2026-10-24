@@ -99,8 +99,12 @@
     const b = `<div class="page-inner">
       <div class="running-head"><span>${esc(r.title)}</span><span>${esc(r.category || "")}</span></div>
       <h3 class="section-title">אופן ההכנה</h3>
-      <ol class="steps">${(r.steps || []).map(s => `<li tabindex="0"><span>${esc(s)}</span></li>`).join("")}</ol>
+      ${(r.steps || []).length
+        ? `<ol class="steps">${r.steps.map(s => `<li tabindex="0"><span>${esc(s)}</span></li>`).join("")}</ol>`
+        : (r.link ? "" : `<p class="empty">אופן ההכנה עוד לא נכתב.</p>`)}
+      ${/^https:\/\//.test(r.link || "") ? `<a class="video-link" href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.linkLabel || "למתכון המלא בסרטון")} ←</a>` : ""}
       ${tips.map(t => `<p class="tips">${esc(t)}</p>`).join("")}
+      ${r.source ? `<p class="source">מקור: ${esc(r.source)}</p>` : ""}
     </div>`;
     return [a, b];
   }
