@@ -214,6 +214,11 @@
   }
 
   function refreshPhotos() {
+    stage.querySelectorAll(".recipe-head .head-actions").forEach(h => {
+      const r = units[current] && units[current].r; if (!r) return;
+      const tmp = document.createElement("div"); tmp.innerHTML = recipeBlocks(r).head;
+      const fresh = tmp.querySelector(".head-actions"); if (fresh) h.replaceWith(fresh);
+    });
     stage.querySelectorAll("[data-photo-for]").forEach(fig => {
       const r = recipes.find(x => x.id === fig.dataset.photoFor);
       if (r) fig.outerHTML = polaroidHTML(r);
@@ -321,6 +326,9 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
               שיתוף לסטורי
             </button>
+            ${canUpload ? `<button class="sticker-btn small photo-btn" type="button" data-photo-pick="${esc(r.id)}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="13.5" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 7l1.5-2.5h4L15.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+              ${photos[r.id] ? "החלפת תמונה" : "הוספת תמונה"}</button>` : ""}
             ${isOwn() ? `<button class="sticker-btn small" type="button" data-edit="${esc(r.id)}">עריכה</button>` : ""}
           </div>
         </header>`,
@@ -1300,8 +1308,14 @@
   }
 
   // offline support when running as a regular website (not inside claude.ai)
-  if ("serviceWorker" in navigator && location.protocol === "https:" && !window.claude) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost") && !window.claude) {
+    // when a new version takes over (e.g. an older home-screen app updating), reload once to show it
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (hadController && !reloaded) { reloaded = true; location.reload(); }
+    });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => r.update()).catch(() => {});
   }
 
   $("go-shelf").addEventListener("click", () => showShelf(true));
