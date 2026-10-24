@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FoodLi</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="theme-color" content="#2f3328">
+<meta name="theme-color" content="#f6f4fb">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amatic+SC:wght@700&family=Assistant:wght@400;600;700&family=Frank+Ruhl+Libre:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;500;600;700&family=Fredoka:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -21,12 +21,12 @@
   <main class="stage" id="stage" aria-live="polite"></main>
 
   <nav class="controls" aria-label="דפדוף">
-    <button class="nav-btn" id="prev" type="button" aria-label="עמוד קודם"><span aria-hidden="true">→</span><span class="nav-label">הקודם</span></button>
+    <button class="nav-btn" id="prev" type="button" aria-label="הקודם"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <div class="controls-mid">
       <span class="folio" id="folio"></span>
-      <button class="chip-btn" id="wake" type="button" aria-pressed="false" hidden>להשאיר מסך דולק</button>
+      <button class="chip-btn" id="wake" type="button" aria-pressed="false" title="המסך לא ייכבה בזמן הבישול" hidden>מסך דולק</button>
     </div>
-    <button class="nav-btn" id="next" type="button" aria-label="עמוד הבא"><span class="nav-label">הבא</span><span aria-hidden="true">←</span></button>
+    <button class="nav-btn" id="next" type="button" aria-label="הבא"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </nav>
 </div>
 <script src="recipes.js"></script>

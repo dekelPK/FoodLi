@@ -17,8 +17,8 @@
 
   // units: what one "turn" shows. Cover, TOC, then one per recipe.
   const units = [{ type: "cover" }, { type: "toc" }].concat(recipes.map(r => ({ type: "recipe", r })));
-  // page numbers: TOC = 1–2, each recipe takes two pages after that.
-  const firstPage = idx => idx === 1 ? 1 : 3 + (idx - 2) * 2;
+  // every chapter gets its own color (6 colors, cycling)
+  const chClass = c => "ch-" + (Math.max(0, chapterOrder.indexOf(c)) % 6);
 
   // ---------- helpers ----------
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -32,19 +32,20 @@
   let activeChapter = "";
   let busy = false;
 
-  const ornament = '<svg class="ornament" viewBox="0 0 64 16" aria-hidden="true"><path d="M2 8h22M40 8h22" stroke="currentColor" stroke-width="1"/><path d="M32 2c3 3 3 9 0 12c-3-3-3-9 0-12z" fill="currentColor"/><circle cx="26" cy="8" r="1.5" fill="currentColor"/><circle cx="38" cy="8" r="1.5" fill="currentColor"/></svg>';
+  const countIngredients = r => (r.ingredients || []).filter(l => !String(l).trim().endsWith(":")).length;
 
   // ---------- page content ----------
   function coverHTML() {
+    const dots = chapters.map(c => `<span class="dot ${chClass(c)}" title="${esc(c)}"></span>`).join("");
     return `<section class="page cover">
-      <div class="cover-frame">
-        ${ornament}
+      <div class="blobs" aria-hidden="true"><span class="blob ch-0"></span><span class="blob ch-1"></span><span class="blob ch-2"></span><span class="blob ch-3"></span><span class="blob ch-4"></span><span class="blob ch-5"></span></div>
+      <div class="cover-body">
+        <span class="eyebrow">${esc(BOOK.subtitle || "")}</span>
         <h1>${esc(BOOK.title)}</h1>
-        <div class="sub">${esc(BOOK.subtitle || "")}</div>
-        ${ornament}
-        <div class="count">${recipes.length} מתכונים · ${chapters.length} פרקים</div>
+        <div class="cover-dots" aria-hidden="true">${dots}</div>
+        <p class="cover-count">${recipes.length} מתכונים ב־${chapters.length} פרקים</p>
+        <button class="btn-primary" type="button" data-go="1">לפתוח את הספר</button>
       </div>
-      <button class="open-btn" type="button" data-go="1">לפתוח את הספר</button>
     </section>`;
   }
 
@@ -58,52 +59,57 @@
         .filter(x => x.r.category === ch)
         .filter(x => !q || [x.r.title, x.r.intro, (x.r.ingredients || []).join(" ")].join(" ").includes(q));
       if (!items.length) return;
-      parts.push(`<div class="toc-chapter"><h3>${esc(ch)}</h3><ul>${items.map(x =>
-        `<li><button class="toc-entry" type="button" data-go="${x.unit}"><span class="t">${esc(x.r.title)}</span><span class="leader"></span><span class="pg">${firstPage(x.unit)}</span></button></li>`
-      ).join("")}</ul></div>`);
+      parts.push(`<section class="toc-group ${chClass(ch)}"><h3>${esc(ch)}</h3><div class="tiles">${items.map(x => {
+        const n = countIngredients(x.r);
+        const sub = x.r.time || (n ? n + " מצרכים" : (x.r.link ? "בסרטון" : ""));
+        return `<button class="tile" type="button" data-go="${x.unit}"><span class="tile-title">${esc(x.r.title)}</span>${sub ? `<span class="tile-sub">${esc(sub)}</span>` : ""}</button>`;
+      }).join("")}</div></section>`);
     });
-    return parts.length ? parts.join("") : `<p class="empty">לא נמצא מתכון שמתאים לחיפוש.</p>`;
+    return parts.length ? parts.join("") : `<p class="empty">לא מצאתי מתכון כזה. אפשר לנסות מילה אחרת.</p>`;
   }
 
   function tocParts() {
     const a = `<div class="page-inner toc-head">
-      <div class="running-head"><span>${esc(BOOK.title)}</span><span>תוכן עניינים</span></div>
-      <h2>תוכן עניינים</h2>
-      ${BOOK.intro ? `<p class="book-intro">${esc(BOOK.intro)}</p>` : ""}
-      <input class="search" id="search" type="search" aria-label="חיפוש מתכון" placeholder="חיפוש מתכון או מצרך…" value="${esc(query)}" autocomplete="off">
+      <h2>מה מבשלים היום?</h2>
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input class="search" id="search" type="search" aria-label="חיפוש מתכון" placeholder="חיפוש לפי מתכון או מצרך" value="${esc(query)}" autocomplete="off">
+      </div>
       <div class="chapters" role="group" aria-label="פרקים">
         <button class="chapter-chip" type="button" data-chapter="" aria-pressed="${!activeChapter}">הכול</button>
-        ${chapters.map(c => `<button class="chapter-chip" type="button" data-chapter="${esc(c)}" aria-pressed="${activeChapter === c}">${esc(c)}</button>`).join("")}
+        ${chapters.map(c => `<button class="chapter-chip ${chClass(c)}" type="button" data-chapter="${esc(c)}" aria-pressed="${activeChapter === c}">${esc(c)}</button>`).join("")}
       </div>
+      <p class="hint">בתוך מתכון: לחיצה על מצרך או על שלב מסמנת אותו.</p>
     </div>`;
     const b = `<div class="page-inner"><div class="toc-list" id="toc-list">${tocListHTML()}</div></div>`;
     return [a, b];
   }
 
-  function recipeParts(r, unitIdx) {
-    const meta = [["זמן", r.time], ["כמות", r.servings]].filter(m => m[1]);
+  function recipeParts(r) {
+    const meta = [r.time, r.servings].filter(Boolean);
     const ings = (r.ingredients || []).map((line, i) => {
       const s = String(line).trim();
       if (s.endsWith(":")) return `<li class="sub">${esc(s.slice(0, -1))}</li>`;
       return `<li><label><input type="checkbox" id="ing-${esc(r.id)}-${i}"><span>${esc(s)}</span></label></li>`;
     }).join("");
     const tips = Array.isArray(r.tips) ? r.tips : (r.tips ? [r.tips] : []);
+    const hasLink = /^https:\/\//.test(r.link || "");
     const a = `<div class="page-inner">
-      <div class="running-head"><span>${esc(BOOK.title)}</span><span>${esc(r.category || "")}</span></div>
-      ${r.example ? `<span class="example-tag">מתכון לדוגמה</span>` : ""}
-      <h2 class="recipe-title">${esc(r.title)}</h2>
-      ${meta.length ? `<dl class="meta">${meta.map(m => `<div><dt>${m[0]}</dt><dd>${esc(m[1])}</dd></div>`).join("")}</dl>` : ""}
-      ${r.intro ? `<p class="intro">${esc(r.intro)}</p>` : ""}
-      ${ings ? `<h3 class="section-title">מצרכים</h3><ul class="ingredients">${ings}</ul>` : ""}
+      <div class="recipe-head">
+        <span class="tag">${esc(r.category || "")}</span>
+        <h2 class="recipe-title">${esc(r.title)}</h2>
+        ${meta.length ? `<div class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join("")}</div>` : ""}
+        ${r.intro ? `<p class="intro">${esc(r.intro)}</p>` : ""}
+      </div>
+      ${ings ? `<div class="ing-card"><h3 class="section-title">מצרכים</h3><ul class="ingredients">${ings}</ul></div>` : ""}
     </div>`;
     const b = `<div class="page-inner">
-      <div class="running-head"><span>${esc(r.title)}</span><span>${esc(r.category || "")}</span></div>
-      <h3 class="section-title">אופן ההכנה</h3>
+      ${(r.steps || []).length || !hasLink ? `<h3 class="section-title">אופן ההכנה</h3>` : ""}
       ${(r.steps || []).length
-        ? `<ol class="steps">${r.steps.map(s => `<li tabindex="0"><span>${esc(s)}</span></li>`).join("")}</ol>`
-        : (r.link ? "" : `<p class="empty">אופן ההכנה עוד לא נכתב.</p>`)}
-      ${/^https:\/\//.test(r.link || "") ? `<a class="video-link" href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.linkLabel || "למתכון המלא בסרטון")} ←</a>` : ""}
-      ${tips.map(t => `<p class="tips">${esc(t)}</p>`).join("")}
+        ? `<ol class="steps">${r.steps.map((s, i) => `<li tabindex="0"><b aria-hidden="true">${i + 1}</b><span>${esc(s)}</span></li>`).join("")}</ol>`
+        : (hasLink ? "" : `<p class="empty">אופן ההכנה עוד לא נכתב.</p>`)}
+      ${hasLink ? `<a class="btn-primary video-link" href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.linkLabel || "למתכון המלא בסרטון")}</a>` : ""}
+      ${tips.length ? `<div class="tips"><span class="tips-label">טיפ</span>${tips.map(t => `<p>${esc(t)}</p>`).join("")}</div>` : ""}
       ${r.source ? `<p class="source">מקור: ${esc(r.source)}</p>` : ""}
     </div>`;
     return [a, b];
@@ -112,24 +118,24 @@
   function partsFor(idx) {
     const u = units[idx];
     if (u.type === "toc") return tocParts();
-    return recipeParts(u.r, idx);
+    return recipeParts(u.r);
   }
+  const unitClass = idx => units[idx].type === "recipe" ? chClass(units[idx].r.category) : "";
 
   // ---------- rendering ----------
   function buildWide(idx) {
     if (units[idx].type === "cover") return `<div class="book closed">${coverHTML()}</div>`;
     const [a, b] = partsFor(idx);
-    const p = firstPage(idx);
-    return `<div class="book">
-      <section class="page right">${a}<div class="page-num">${p}</div></section>
-      <section class="page left">${b}<div class="page-num">${p + 1}</div></section>
+    return `<div class="book ${unitClass(idx)}">
+      <section class="page right">${a}</section>
+      <section class="page left">${b}</section>
     </div>`;
   }
 
   function buildNarrow(idx) {
     if (units[idx].type === "cover") return coverHTML().replace('class="page cover"', 'class="page cover sheet fade"');
     const [a, b] = partsFor(idx);
-    return `<section class="page sheet fade">${a}${b}<div class="page-num">עמודים <span dir="ltr">${firstPage(idx)}–${firstPage(idx) + 1}</span></div></section>`;
+    return `<section class="page sheet fade ${unitClass(idx)}">${a}${b}</section>`;
   }
 
   function render(idx) {
@@ -141,10 +147,12 @@
     $("prev").disabled = current === 0;
     $("next").disabled = current === units.length - 1;
     const u = units[current];
-    $("folio").textContent = u.type === "cover" ? "כריכה"
-      : u.type === "toc" ? "תוכן עניינים"
-      : `${current - 1} מתוך ${recipes.length}`;
+    $("folio").textContent = u.type === "cover" ? ""
+      : u.type === "toc" ? "תוכן העניינים"
+      : `מתכון ${current - 1} מתוך ${recipes.length}`;
     $("go-toc").hidden = u.type === "toc";
+    $("wake").hidden = !("wakeLock" in navigator) || u.type !== "recipe";
+    document.body.className = unitClass(current);
   }
 
   function setHash() {
@@ -273,11 +281,10 @@
   let lock = null;
   const wakeBtn = $("wake");
   if ("wakeLock" in navigator) {
-    wakeBtn.hidden = false;
-    const setPressed = on => { wakeBtn.setAttribute("aria-pressed", String(on)); wakeBtn.textContent = on ? "המסך יישאר דולק" : "להשאיר מסך דולק"; };
+    const setPressed = on => { wakeBtn.setAttribute("aria-pressed", String(on)); wakeBtn.textContent = on ? "המסך דולק" : "מסך דולק"; };
     const acquire = async () => {
       try { lock = await navigator.wakeLock.request("screen"); setPressed(true); lock.addEventListener("release", () => { if (!document.hidden) setPressed(false); }); }
-      catch (e) { lock = null; setPressed(false); wakeBtn.textContent = "לא ניתן להשאיר דולק"; }
+      catch (e) { lock = null; setPressed(false); wakeBtn.textContent = "לא זמין"; }
     };
     wakeBtn.addEventListener("click", async () => {
       if (lock) { const l = lock; lock = null; try { await l.release(); } catch (e) { /* ignore */ } setPressed(false); }
