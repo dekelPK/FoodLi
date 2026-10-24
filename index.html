@@ -22,12 +22,15 @@
 <div id="app" dir="rtl" lang="he">
   <header class="topbar">
     <button class="logo" id="go-cover" type="button" aria-label="לכריכה"></button>
-    <button class="sticker-btn" id="go-toc" type="button">תוכן עניינים</button>
+    <div class="topbar-actions">
+      <button class="sticker-btn" id="go-shelf" type="button" hidden>המדף</button>
+      <button class="sticker-btn" id="go-toc" type="button">תוכן עניינים</button>
+    </div>
   </header>
 
   <main class="stage" id="stage" aria-live="polite"></main>
 
-  <nav class="controls" aria-label="דפדוף">
+  <nav class="controls" id="controls" aria-label="דפדוף">
     <button class="nav-btn" id="prev" type="button" aria-label="הקודם"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <div class="controls-mid">
       <span class="folio" id="folio"></span>
@@ -37,6 +40,12 @@
   </nav>
 
   <input type="file" id="photo-input" accept="image/*" hidden>
+
+  <div class="modal" id="sheet-modal" role="dialog" aria-modal="true" aria-label="עריכה" hidden>
+    <div class="modal-card wide" id="sheet-card"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
 
   <div class="modal" id="story-modal" role="dialog" aria-modal="true" aria-labelledby="story-title" hidden>
     <div class="modal-card">
@@ -51,6 +60,7 @@
     </div>
   </div>
 </div>
+<script src="firebase-config.js"></script>
 <script src="recipes.js"></script>
 <script src="app.js"></script>
 </body>

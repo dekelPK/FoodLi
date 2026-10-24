@@ -17,3 +17,24 @@
 - באינטרנט (GitHub Pages): Settings → Pages → Source: Deploy from a branch → Branch: `master`, תיקייה `/ (root)` → Save. אחרי דקה־שתיים האתר זמין בכתובת https://dekelpk.github.io/FoodLi/
 - הוספה למסך הבית: באייפון פותחים את הכתובת ב־Safari, לוחצים על כפתור השיתוף ואז "הוספה למסך הבית". באנדרואיד ב־Chrome: תפריט ⋮ ואז "הוספה למסך הבית".
 - אחרי עדכון מתכונים, כדי לראות את השינוי באפליקציה במסך הבית צריך לפתוח אותה פעמיים (בפעם הראשונה היא מורידה את העדכון ברקע).
+
+## ספרים משותפים (חשבונות לחברות)
+
+כשהקובץ `firebase-config.js` ריק, האתר עובד כספר אחד (המתכונים מ־`recipes.js`). אחרי שמכניסים אליו הגדרות של Firebase:
+
+- כל אחת פותחת חשבון (שם, אימייל וסיסמה) ומקבלת ספר משלה.
+- ב"מדף הספרים" רואים את הספר שלך ואת הספרים של כל מי שנרשמה.
+- רק בעלת הספר יכולה להוסיף, לערוך ולמחוק מתכונים ותמונות בספר שלה. הכלל הזה נאכף במסד הנתונים (`firestore.rules`).
+- בספר ריק יש כפתור שמעתיק אליו את המתכונים מ־`recipes.js`.
+
+### הקמה חד־פעמית ב־Firebase (חינם, בלי כרטיס אשראי)
+
+1. נכנסים ל־https://console.firebase.google.com ולוחצים **Create a project**. שם: FoodLi. את Google Analytics אפשר לכבות.
+2. בתפריט: **Build → Authentication → Get started → Email/Password** → מפעילים את האפשרות הראשונה → **Save**.
+3. באותו מסך: **Settings → Authorized domains → Add domain** → `dekelpk.github.io`.
+4. בתפריט: **Build → Firestore Database → Create database** → מיקום `eur3 (europe-west)` → **Start in production mode** → **Create**.
+5. בלשונית **Rules** של Firestore מוחקים הכול, מדביקים את התוכן של `firestore.rules` ולוחצים **Publish**.
+6. גלגל השיניים ליד **Project Overview** → **Project settings** → למטה **Your apps** → הסמל `</>` (Web) → שם: FoodLi → **Register app**.
+7. מעתיקים את האובייקט `firebaseConfig` ומדביקים אותו ב־`firebase-config.js` במקום `null`.
+
+הערכים ב־`firebaseConfig` אינם סודיים: הם מזהים את הפרויקט, וההגנה על הנתונים היא כללי ה־Firestore.

@@ -1,22 +1,33 @@
 (function () {
   "use strict";
 
-  const BOOK = window.BOOK || { title: "FoodLi", subtitle: "ספר המתכונים שלי" };
-  const RAW = Array.isArray(window.RECIPES) ? window.RECIPES : [];
+  // Shared books are on when firebase-config.js holds a config (and we are not inside claude.ai)
+  const CLOUD_CONFIG = window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey && !window.claude ? window.FIREBASE_CONFIG : null;
+  const DEFAULT_CHAPTERS = ["מרקים", "עיקריות", "תוספות", "סלטים", "מאפים", "עוגות", "עוגיות", "קינוחים"];
 
   document.documentElement.lang = "he";
   document.documentElement.dir = "rtl";
 
-  // ---------- data ----------
-  const chapterOrder = (BOOK.chapters || []).slice();
-  RAW.forEach(r => { if (r.category && !chapterOrder.includes(r.category)) chapterOrder.push(r.category); });
-  const recipes = RAW
-    .map((r, i) => ({ ...r, id: r.id || "r" + (i + 1), _i: i }))
-    .sort((a, b) => (chapterOrder.indexOf(a.category) - chapterOrder.indexOf(b.category)) || (a._i - b._i));
-  const chapters = chapterOrder.filter(c => recipes.some(r => r.category === c));
-
+  // ---------- data: the book that is open ----------
+  let BOOK = {}, chapterOrder = [], recipes = [], chapters = [];
   // units: what one "turn" shows. Cover, TOC, then one per recipe.
-  const units = [{ type: "cover" }, { type: "toc" }].concat(recipes.map(r => ({ type: "recipe", r })));
+  let units = [{ type: "cover" }, { type: "toc" }];
+  const createdSec = r => (r.createdAt && r.createdAt.seconds) || 1e12;
+
+  function setBook(book, list, keepPhotos) {
+    BOOK = book || {};
+    list = list || [];
+    chapterOrder = (BOOK.chapters && BOOK.chapters.length ? BOOK.chapters : DEFAULT_CHAPTERS).slice();
+    list.forEach(r => { if (r.category && !chapterOrder.includes(r.category)) chapterOrder.push(r.category); });
+    recipes = list
+      .map((r, i) => ({ ...r, id: r.id || "r" + (i + 1), _i: i }))
+      .sort((a, b) => (chapterOrder.indexOf(a.category) - chapterOrder.indexOf(b.category))
+        || ((a.order ?? 1e9) - (b.order ?? 1e9)) || (createdSec(a) - createdSec(b)) || (a._i - b._i));
+    chapters = chapterOrder.filter(c => recipes.some(r => r.category === c));
+    units = [{ type: "cover" }, { type: "toc" }].concat(recipes.map(r => ({ type: "recipe", r })));
+    if (!keepPhotos) Object.keys(photos).forEach(k => delete photos[k]);
+    recipes.forEach(r => { if (r.photo && !photos[r.id]) photos[r.id] = r.photo; });
+  }
   const chIndex = c => Math.max(0, chapterOrder.indexOf(c)) % 6;
   const chClass = c => "ch-" + chIndex(c);
   // the same six chapter colors as style.css, for the Story canvas
@@ -28,10 +39,15 @@
   const wideMQ = window.matchMedia("(min-width: 900px) and (min-height: 560px)");
   const reduceMQ = window.matchMedia("(prefers-reduced-motion: reduce)");
   const stage = $("stage");
+  let me = null;               // signed-in user (shared books only)
+  let openBookId = null;
+  const isOwn = () => !!(CLOUD_CONFIG && me && openBookId === me.uid);
   const isSub = l => String(l).trim().endsWith(":");
   const countIngredients = r => (r.ingredients || []).filter(l => !isSub(l)).length;
   const tipsOf = r => Array.isArray(r.tips) ? r.tips : (r.tips ? [r.tips] : []);
 
+  let view = "book";           // book | login | shelf | loading
+  let loadingText = "";
   let current = 0;
   let query = "";
   let activeChapter = "";
@@ -47,7 +63,7 @@
   let store = null;            // { save(id, blob), remove(id) }
   let photoNote = "";
 
-  recipes.forEach(r => { if (r.photo) photos[r.id] = r.photo; });
+  if (!CLOUD_CONFIG) setBook(window.BOOK || { title: "FoodLi", subtitle: "ספר המתכונים שלי" }, Array.isArray(window.RECIPES) ? window.RECIPES : []);
 
   async function initClaudeStore() {
     const [db, assets] = await Promise.all([window.claude.use("db"), window.claude.use("assets")]);
@@ -104,11 +120,12 @@
     } catch (e) { /* no storage: photos stay read-only */ }
   }
 
-  if (window.claude && typeof window.claude.use === "function") initClaudeStore();
+  if (CLOUD_CONFIG) { /* photos are loaded per book, see openBook() */ }
+  else if (window.claude && typeof window.claude.use === "function") initClaudeStore();
   else initLocalStore();
 
   // shrink a picked photo to a sensible size before storing it
-  function shrinkImage(file, max = 1600) {
+  function shrinkImage(file, max = 1600, quality = 0.86) {
     return new Promise((res, rej) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -118,7 +135,7 @@
         c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
         c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
-        c.toBlob(b => b ? res(b) : rej(new Error("encode")), "image/jpeg", 0.86);
+        c.toBlob(b => b ? res(b) : rej(new Error("encode")), "image/jpeg", quality);
       };
       img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("decode")); };
       img.src = url;
@@ -134,7 +151,7 @@
     if (!file || !id || !store) return;
     setPhotoBusy(id, "מעלה תמונה…");
     try {
-      await store.save(id, await shrinkImage(file));
+      await store.save(id, await shrinkImage(file, CLOUD_CONFIG ? 1100 : 1600));
       refreshPhotos();
     } catch (e) {
       const code = e && e.code;
@@ -201,7 +218,7 @@
       ${coverPhotosHTML()}
       <div class="cover-body">
         <span class="cover-eyebrow">${esc(BOOK.subtitle || "")}</span>
-        <h1>${esc(BOOK.title)}</h1>
+        <h1 class="${[...String(BOOK.title || "")].length > 7 ? "long" : ""}">${esc(BOOK.title)}</h1>
         <div class="cover-stickers">${stickers}</div>
         <p class="cover-count">${recipes.length} מתכונים שאני אוהבת</p>
         <button class="sticker-btn primary big" type="button" data-go="1">לפתוח את הספר</button>
@@ -230,6 +247,13 @@
         </button></li>`;
       }).join("")}</ul></section>`);
     });
+    if (!recipes.length) {
+      return isOwn()
+        ? `<div class="empty-book"><p class="empty">הספר עוד ריק. בואי נוסיף את המתכון הראשון!</p>
+            <button class="sticker-btn primary" type="button" data-action="new-recipe">+ מתכון חדש</button>
+            ${Array.isArray(window.RECIPES) && window.RECIPES.length ? `<button class="sticker-btn small" type="button" data-action="import">להעתיק לכאן את ${window.RECIPES.length} המתכונים של FoodLi</button>` : ""}</div>`
+        : `<p class="empty">עוד אין כאן מתכונים.</p>`;
+    }
     return parts.length ? parts.join("") : `<p class="empty">לא מצאתי מתכון כזה. אפשר לנסות מילה אחרת.</p>`;
   }
 
@@ -244,7 +268,11 @@
         <button class="chapter-chip" type="button" data-chapter="" aria-pressed="${!activeChapter}">הכול</button>
         ${chapters.map(c => `<button class="chapter-chip ${chClass(c)}" type="button" data-chapter="${esc(c)}" aria-pressed="${activeChapter === c}">${esc(c)}</button>`).join("")}
       </div>
-      <p class="note-hand">בתוך מתכון אפשר לסמן מצרכים ושלבים, להוסיף תמונה ולשתף לסטורי</p>
+      ${isOwn() ? `<div class="owner-actions">
+        <button class="sticker-btn primary" type="button" data-action="new-recipe">+ מתכון חדש</button>
+        <button class="sticker-btn small" type="button" data-action="book-settings">שם וצבע הספר</button>
+      </div>` : ""}
+      <p class="note-hand">בתוך מתכון אפשר לסמן מצרכים ושלבים, ${isOwn() || !CLOUD_CONFIG ? "להוסיף תמונה " : ""}ולשתף לסטורי</p>
     </div>`;
     const b = `<div class="page-inner"><div class="toc-list" id="toc-list">${tocListHTML()}</div></div>`;
     return [a, b];
@@ -264,10 +292,13 @@
           <span class="chapter-badge">${esc(r.category || "")}</span>
           <h2 class="display recipe-title">${esc(r.title)}</h2>
           ${meta.length ? `<p class="meta">${meta.map(m => `<span>${esc(m)}</span>`).join("")}</p>` : ""}
-          <button class="sticker-btn share-btn" type="button" data-story="${esc(r.id)}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-            שיתוף לסטורי
-          </button>
+          <div class="head-actions">
+            <button class="sticker-btn share-btn" type="button" data-story="${esc(r.id)}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+              שיתוף לסטורי
+            </button>
+            ${isOwn() ? `<button class="sticker-btn small" type="button" data-edit="${esc(r.id)}">עריכה</button>` : ""}
+          </div>
         </header>`,
       photo: polaroidHTML(r),
       intro: r.intro ? `<p class="intro">${esc(r.intro)}</p>` : "",
@@ -317,11 +348,19 @@
 
   function render(idx) {
     $("story-modal").hidden = true;
-    stage.innerHTML = wideMQ.matches ? buildWide(idx) : buildNarrow(idx);
+    if (view === "loading") stage.innerHTML = `<p class="loading-page">${esc(loadingText)}</p>`;
+    else if (view === "login") stage.innerHTML = loginHTML();
+    else if (view === "shelf") stage.innerHTML = shelfHTML();
+    else stage.innerHTML = wideMQ.matches ? buildWide(idx) : buildNarrow(idx);
     updateControls();
   }
 
   function updateControls() {
+    const inBook = view === "book";
+    $("controls").hidden = !inBook;
+    $("go-shelf").hidden = !CLOUD_CONFIG || view !== "book";
+    $("go-cover").disabled = !inBook;
+    if (!inBook) { $("go-toc").hidden = true; document.body.className = "ch-0"; return; }
     $("prev").disabled = current === 0;
     $("next").disabled = current === units.length - 1;
     const u = units[current];
@@ -330,10 +369,11 @@
       : `${current - 1} מתוך ${recipes.length}`;
     $("go-toc").hidden = u.type === "toc";
     $("wake").hidden = !("wakeLock" in navigator) || u.type !== "recipe";
-    document.body.className = unitClass(current) || "ch-0";
+    document.body.className = unitClass(current) || "ch-" + ((BOOK.color || 0) % 6);
   }
 
   function setHash() {
+    if (view !== "book") { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* ignore */ } return; }
     const u = units[current];
     const h = u.type === "cover" ? "" : u.type === "toc" ? "#toc" : "#" + u.r.id;
     try { history.replaceState(null, "", h || location.pathname + location.search); } catch (e) { /* ignore */ }
@@ -368,6 +408,7 @@
   }
 
   async function go(idx) {
+    if (view !== "book") return;
     idx = Math.max(0, Math.min(units.length - 1, idx));
     if (idx === current || busy) return;
     const forward = idx > current;
@@ -585,14 +626,395 @@
   $("story-save").addEventListener("click", saveStory);
   $("story-modal").addEventListener("click", e => { if (e.target.id === "story-modal") closeStory(); });
 
+  // ======================================================
+  //  Shared books (Firebase). Only runs when firebase-config.js is filled in.
+  // ======================================================
+  let cloud = null;
+  let shelf = [];
+  let loginMode = "in";        // in | up | reset
+  let pendingName = "";
+  let editingId = null;
+
+  const AUTH_ERRORS = {
+    "auth/invalid-credential": "האימייל או הסיסמה לא נכונים.",
+    "auth/wrong-password": "האימייל או הסיסמה לא נכונים.",
+    "auth/user-not-found": "לא מצאתי חשבון עם האימייל הזה.",
+    "auth/email-already-in-use": "כבר יש חשבון עם האימייל הזה. אפשר להתחבר אליו.",
+    "auth/weak-password": "הסיסמה צריכה להיות לפחות 6 תווים.",
+    "auth/invalid-email": "כתובת האימייל לא תקינה.",
+    "auth/missing-password": "צריך למלא סיסמה.",
+    "auth/network-request-failed": "אין חיבור לאינטרנט. נסי שוב כשיש קליטה.",
+    "auth/too-many-requests": "יותר מדי ניסיונות. נסי שוב בעוד כמה דקות."
+  };
+  const authError = e => AUTH_ERRORS[e && e.code] || "משהו השתבש. נסי שוב.";
+
+  function toast(msg) {
+    const t = $("toast"); t.textContent = msg; t.hidden = false;
+    clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 3200);
+  }
+
+  function showLoading(text) { view = "loading"; loadingText = text; render(0); }
+
+  function loginHTML() {
+    const up = loginMode === "up", reset = loginMode === "reset";
+    return `<section class="page sheet auth fade">
+      <div class="page-inner">
+        <span class="chapter-badge">ספרי מתכונים משותפים</span>
+        <h2 class="display auth-title">${up ? "ספר חדש" : reset ? "שכחתי סיסמה" : "שלום!"}</h2>
+        <p class="intro">${up ? "פותחים חשבון ומקבלים ספר מתכונים משלך. תוכלי לראות גם את הספרים של החברות." : reset ? "נשלח לך מייל עם קישור לבחירת סיסמה חדשה." : "מתחברים כדי לפתוח את הספר שלך ואת הספרים של החברות."}</p>
+        <form class="auth-form" id="auth-form" novalidate>
+          ${up ? `<label class="field"><span>איך קוראים לך?</span><input id="auth-name" name="name" type="text" autocomplete="given-name" required></label>` : ""}
+          <label class="field"><span>אימייל</span><input id="auth-email" name="email" type="email" autocomplete="email" dir="ltr" required></label>
+          ${reset ? "" : `<label class="field"><span>סיסמה${up ? " (לפחות 6 תווים)" : ""}</span><input id="auth-password" name="password" type="password" autocomplete="${up ? "new-password" : "current-password"}" dir="ltr" required></label>`}
+          <p class="form-error" id="auth-error" role="alert"></p>
+          <button class="sticker-btn primary big" type="submit">${up ? "פתיחת ספר" : reset ? "שליחת מייל" : "כניסה"}</button>
+        </form>
+        <div class="auth-switch">
+          ${loginMode !== "in" ? `<button type="button" class="link-btn" data-login-mode="in">יש לי כבר חשבון</button>` : `<button type="button" class="link-btn" data-login-mode="up">אין לי חשבון עדיין</button><button type="button" class="link-btn" data-login-mode="reset">שכחתי סיסמה</button>`}
+        </div>
+      </div>
+    </section>`;
+  }
+
+  function shelfHTML() {
+    const mine = shelf.find(b => me && b.id === me.uid);
+    const others = shelf.filter(b => !me || b.id !== me.uid).sort((a, b) => String(a.title).localeCompare(String(b.title), "he"));
+    const card = (b, own) => `<button type="button" class="shelf-book ch-${(b.color || 0) % 6}" data-open-book="${esc(b.id)}">
+        ${own ? `<span class="own-tag">הספר שלי</span>` : ""}
+        <span class="shelf-title">${esc(b.title || "")}</span>
+        ${b.ownerName && b.ownerName !== b.title ? `<span class="shelf-owner">${esc(b.ownerName)}</span>` : ""}
+        <span class="shelf-count">${b.recipeCount || 0} מתכונים</span>
+      </button>`;
+    return `<section class="page sheet shelf fade">
+      <div class="page-inner">
+        <h2 class="display shelf-head">מדף הספרים</h2>
+        <p class="note-hand">שלום ${esc((me && me.displayName) || "")}! כאן הספר שלך והספרים של החברות</p>
+        <div class="shelf-grid">${mine ? card(mine, true) : ""}${others.map(b => card(b, false)).join("")}</div>
+        ${others.length ? "" : `<p class="shelf-empty">עוד אין כאן ספרים של חברות. שלחי לחברה את הקישור לאתר. ברגע שהיא תפתח חשבון, הספר שלה יופיע כאן.</p>`}
+        <div class="shelf-foot">
+          <span class="me-line" dir="ltr">${esc((me && me.email) || "")}</span>
+          <button class="sticker-btn small" type="button" data-action="signout">יציאה</button>
+        </div>
+      </div>
+    </section>`;
+  }
+
+  async function startCloud() {
+    showLoading("פותחת את המדף…");
+    try {
+      const mod = await import("./cloud.js");
+      cloud = await mod.initCloud(CLOUD_CONFIG, !!window.FIREBASE_EMULATOR);
+    } catch (e) {
+      showLoading("לא הצלחתי להתחבר. בדקי שיש אינטרנט ונסי לפתוח שוב.");
+      return;
+    }
+    cloud.onUser(async user => {
+      me = user;
+      if (!user) { openBookId = null; view = "login"; render(0); setHash(); return; }
+      loginMode = "in";
+      try {
+        let mineBook = await cloud.getBook(user.uid);
+        if (!mineBook) {
+          const name = (pendingName || user.displayName || user.email.split("@")[0]).trim();
+          mineBook = { title: name, subtitle: "ספר המתכונים שלי", ownerName: name, chapters: DEFAULT_CHAPTERS, color: Math.floor(Math.random() * 6) };
+          await cloud.createBook(user.uid, mineBook);
+        }
+        pendingName = "";
+        shelf = await cloud.listBooks();
+      } catch (e) {
+        showLoading("לא הצלחתי לטעון את הספרים. בדקי את החיבור ונסי שוב.");
+        return;
+      }
+      let last = null;
+      try { last = localStorage.getItem("foodli-book"); } catch (e) { /* ignore */ }
+      if (location.hash && last && shelf.some(b => b.id === last)) openBook(last, true);
+      else showShelf(false);
+    });
+  }
+
+  async function showShelf(refresh) {
+    if (refresh && cloud) { try { shelf = await cloud.listBooks(); } catch (e) { /* show what we have */ } }
+    view = "shelf"; openBookId = null; render(0); setHash();
+    window.scrollTo({ top: 0 });
+  }
+
+  const blobToDataURL = b => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(f.result); f.onerror = () => rej(f.error); f.readAsDataURL(b); });
+
+  function cloudPhotoStore(uid) {
+    return {
+      async save(id, blob) {
+        let data = await blobToDataURL(blob);
+        // a Firestore document holds up to 1 MB, so make sure the photo fits
+        for (const [max, q] of [[900, 0.8], [700, 0.72], [520, 0.66]]) {
+          if (data.length <= 900000) break;
+          data = await blobToDataURL(await shrinkImage(blob, max, q));
+        }
+        await cloud.savePhoto(uid, id, data);
+        photos[id] = data;
+      },
+      async remove(id) { await cloud.removePhoto(uid, id); delete photos[id]; }
+    };
+  }
+
+  async function openBook(id, fromHash) {
+    showLoading("פותחת את הספר…");
+    try {
+      const [book, list] = await Promise.all([cloud.getBook(id), cloud.listRecipes(id)]);
+      if (!book) throw new Error("missing");
+      openBookId = id;
+      setBook(book, list);
+      canUpload = isOwn(); photoNote = "";
+      store = canUpload ? cloudPhotoStore(id) : null;
+      try { localStorage.setItem("foodli-book", id); } catch (e) { /* ignore */ }
+      view = "book"; query = ""; activeChapter = "";
+      current = fromHash ? unitFromHash() : 0;
+      render(current); setHash();
+      window.scrollTo({ top: 0 });
+      cloud.loadPhotos(id).then(map => { if (openBookId !== id) return; Object.assign(photos, map); refreshPhotos(); }).catch(() => {});
+    } catch (e) {
+      await showShelf(false);
+      toast("לא הצלחתי לפתוח את הספר. בדקי את החיבור לאינטרנט.");
+    }
+  }
+
+  // ---------- editor sheet ----------
+  function closeSheet() { $("sheet-modal").hidden = true; editingId = null; }
+
+  function recipeFormHTML(r) {
+    const val = v => esc(v == null ? "" : v);
+    const lines = a => esc((Array.isArray(a) ? a : (a ? [a] : [])).join("\n"));
+    const cat = r ? r.category : (activeChapter || chapterOrder[0]);
+    return `<form class="editor" id="recipe-form" novalidate>
+      <h2 class="display editor-title">${r ? "עריכת מתכון" : "מתכון חדש"}</h2>
+      <label class="field"><span>שם המתכון</span><input id="f-title" name="title" type="text" value="${val(r && r.title)}" required></label>
+      <div class="field-row">
+        <label class="field"><span>פרק</span><select id="f-category" name="category">
+          ${chapterOrder.map(c => `<option value="${esc(c)}"${c === cat ? " selected" : ""}>${esc(c)}</option>`).join("")}
+          <option value="__new">פרק חדש…</option>
+        </select></label>
+        <label class="field" id="f-newcat-wrap" hidden><span>שם הפרק החדש</span><input id="f-newcat" name="newCategory" type="text"></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span>זמן הכנה</span><input id="f-time" name="time" type="text" placeholder="למשל: 40 דקות" value="${val(r && r.time)}"></label>
+        <label class="field"><span>כמות</span><input id="f-servings" name="servings" type="text" placeholder="למשל: 6 מנות" value="${val(r && r.servings)}"></label>
+      </div>
+      <label class="field"><span>כמה מילים על המתכון</span><textarea id="f-intro" name="intro" rows="2">${val(r && r.intro)}</textarea></label>
+      <label class="field"><span>מצרכים</span><small>כל מצרך בשורה נפרדת. כותרת משנה מסתיימת בנקודתיים, למשל: לרוטב:</small><textarea id="f-ingredients" name="ingredients" rows="8">${lines(r && r.ingredients)}</textarea></label>
+      <label class="field"><span>אופן ההכנה</span><small>כל שלב בשורה נפרדת</small><textarea id="f-steps" name="steps" rows="8">${lines(r && r.steps)}</textarea></label>
+      <label class="field"><span>טיפים</span><small>כל טיפ בשורה נפרדת</small><textarea id="f-tips" name="tips" rows="2">${lines(r && r.tips)}</textarea></label>
+      <div class="field-row">
+        <label class="field"><span>קישור לסרטון</span><input id="f-link" name="link" type="url" dir="ltr" placeholder="https://" value="${val(r && r.link)}"></label>
+        <label class="field"><span>מקור</span><input id="f-source" name="source" type="text" value="${val(r && r.source)}"></label>
+      </div>
+      <p class="form-error" id="recipe-error" role="alert"></p>
+      <div class="editor-actions">
+        <button class="sticker-btn primary big" type="submit">שמירה</button>
+        <button class="sticker-btn" type="button" data-sheet="close">ביטול</button>
+        ${r ? `<button class="sticker-btn danger" type="button" data-sheet="delete">מחיקת המתכון</button>` : ""}
+      </div>
+    </form>`;
+  }
+
+  function bookFormHTML() {
+    return `<form class="editor" id="book-form" novalidate>
+      <h2 class="display editor-title">הספר שלי</h2>
+      <label class="field"><span>שם הספר (מופיע בגדול על הכריכה)</span><input id="b-title" name="title" type="text" value="${esc(BOOK.title || "")}" required></label>
+      <label class="field"><span>שורה קטנה מעל השם</span><input id="b-subtitle" name="subtitle" type="text" value="${esc(BOOK.subtitle || "")}"></label>
+      <fieldset class="field colors"><legend>צבע הכריכה</legend>
+        ${[0, 1, 2, 3, 4, 5].map(i => `<label class="swatch ch-${i}"><input type="radio" name="color" value="${i}"${(BOOK.color || 0) % 6 === i ? " checked" : ""}><span></span></label>`).join("")}
+      </fieldset>
+      <p class="form-error" id="book-error" role="alert"></p>
+      <div class="editor-actions">
+        <button class="sticker-btn primary big" type="submit">שמירה</button>
+        <button class="sticker-btn" type="button" data-sheet="close">ביטול</button>
+      </div>
+    </form>`;
+  }
+
+  function openSheet(html, focusId) {
+    $("sheet-card").innerHTML = html;
+    $("sheet-modal").hidden = false;
+    $("sheet-card").scrollTop = 0;
+    const f = focusId && $(focusId); if (f) f.focus();
+  }
+
+  const splitLines = v => String(v || "").split("\n").map(x => x.trim()).filter(Boolean);
+  const plain = r => { const { _i, ...rest } = r; return rest; };
+
+  async function saveRecipeForm(form) {
+    const f = new FormData(form);
+    const err = $("recipe-error");
+    const title = String(f.get("title") || "").trim();
+    let category = String(f.get("category") || "");
+    if (category === "__new") category = String(f.get("newCategory") || "").trim();
+    if (!title) { err.textContent = "צריך לתת למתכון שם."; $("f-title").focus(); return; }
+    if (!category) { err.textContent = "צריך לבחור פרק או לכתוב שם לפרק חדש."; return; }
+    const link = String(f.get("link") || "").trim();
+    if (link && !/^https:\/\//.test(link)) { err.textContent = "הקישור צריך להתחיל ב־https://"; return; }
+    const old = editingId ? recipes.find(x => x.id === editingId) : null;
+    const recipe = {
+      id: old ? old.id : undefined,
+      title, category,
+      time: String(f.get("time") || "").trim() || undefined,
+      servings: String(f.get("servings") || "").trim() || undefined,
+      intro: String(f.get("intro") || "").trim() || undefined,
+      ingredients: splitLines(f.get("ingredients")),
+      steps: splitLines(f.get("steps")),
+      tips: splitLines(f.get("tips")),
+      link: link || undefined,
+      source: String(f.get("source") || "").trim() || undefined,
+      order: old ? old.order : undefined,
+      createdAt: old ? old.createdAt : undefined
+    };
+    const btn = form.querySelector('[type="submit"]'); btn.disabled = true; err.textContent = "";
+    try {
+      const id = await cloud.saveRecipe(me.uid, recipe);
+      const list = recipes.filter(x => x.id !== id).map(plain).concat({ ...recipe, id });
+      const bookChapters = (BOOK.chapters && BOOK.chapters.length ? BOOK.chapters : DEFAULT_CHAPTERS).slice();
+      if (!bookChapters.includes(category)) bookChapters.push(category);
+      await cloud.updateBook(me.uid, { recipeCount: list.length, chapters: bookChapters });
+      setBook({ ...BOOK, chapters: bookChapters, recipeCount: list.length }, list, true);
+      closeSheet();
+      current = Math.max(0, units.findIndex(u => u.r && u.r.id === id));
+      render(current); setHash(); window.scrollTo({ top: 0 });
+      toast("המתכון נשמר");
+    } catch (e) {
+      btn.disabled = false;
+      err.textContent = "השמירה לא הצליחה. בדקי את החיבור לאינטרנט ונסי שוב.";
+    }
+  }
+
+  async function deleteEditingRecipe(btn) {
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "בטוחה? לחיצה נוספת תמחק"; return; }
+    const id = editingId; btn.disabled = true;
+    try {
+      await cloud.deleteRecipe(me.uid, id);
+      const list = recipes.filter(x => x.id !== id).map(plain);
+      await cloud.updateBook(me.uid, { recipeCount: list.length });
+      delete photos[id];
+      setBook({ ...BOOK, recipeCount: list.length }, list, true);
+      closeSheet();
+      current = 1; render(current); setHash();
+      toast("המתכון נמחק");
+    } catch (e) {
+      btn.disabled = false; $("recipe-error").textContent = "המחיקה לא הצליחה. נסי שוב.";
+    }
+  }
+
+  async function saveBookForm(form) {
+    const f = new FormData(form);
+    const title = String(f.get("title") || "").trim();
+    if (!title) { $("book-error").textContent = "צריך לתת לספר שם."; return; }
+    const data = { title, subtitle: String(f.get("subtitle") || "").trim(), color: Number(f.get("color") || 0) };
+    try {
+      await cloud.updateBook(me.uid, data);
+      Object.assign(BOOK, data);
+      const s = shelf.find(b => b.id === me.uid); if (s) Object.assign(s, data);
+      closeSheet(); render(current); toast("הספר עודכן");
+    } catch (e) { $("book-error").textContent = "השמירה לא הצליחה. נסי שוב."; }
+  }
+
+  async function importOriginals(btn) {
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "להעתיק? לחיצה נוספת מאשרת"; return; }
+    btn.disabled = true; btn.textContent = "מעתיקה…";
+    try {
+      const list = window.RECIPES.map((r, i) => {
+        const { example, ...rest } = r;
+        return { ...rest, order: i };
+      });
+      await cloud.importRecipes(me.uid, list);
+      const bookChapters = (BOOK.chapters || DEFAULT_CHAPTERS).slice();
+      list.forEach(r => { if (r.category && !bookChapters.includes(r.category)) bookChapters.push(r.category); });
+      await cloud.updateBook(me.uid, { recipeCount: list.length, chapters: bookChapters });
+      await openBook(me.uid, false);
+      current = 1; render(current); setHash();
+      toast(`${list.length} מתכונים נוספו לספר`);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "ההעתקה לא הצליחה. לנסות שוב";
+      btn.dataset.confirm = "";
+    }
+  }
+
+  // clicks inside the stage that belong to accounts and editing; returns true when handled
+  async function handleCloudClick(e) {
+    const mode = e.target.closest("[data-login-mode]");
+    if (mode) { loginMode = mode.dataset.loginMode; render(0); const n = $("auth-name") || $("auth-email"); if (n) n.focus(); return true; }
+    const ob = e.target.closest("[data-open-book]");
+    if (ob) { openBook(ob.dataset.openBook, false); return true; }
+    const ed = e.target.closest("[data-edit]");
+    if (ed && isOwn()) { editingId = ed.dataset.edit; openSheet(recipeFormHTML(recipes.find(x => x.id === editingId)), "f-title"); return true; }
+    const act = e.target.closest("[data-action]");
+    if (!act) return false;
+    const a = act.dataset.action;
+    if (a === "signout") { try { localStorage.removeItem("foodli-book"); } catch (err) { /* ignore */ } await cloud.signOut(); return true; }
+    if (a === "new-recipe" && isOwn()) { editingId = null; openSheet(recipeFormHTML(null), "f-title"); return true; }
+    if (a === "book-settings" && isOwn()) { openSheet(bookFormHTML(), "b-title"); return true; }
+    if (a === "import" && isOwn()) { importOriginals(act); return true; }
+    return false;
+  }
+
+  if (CLOUD_CONFIG) {
+    stage.addEventListener("submit", async e => {
+      if (e.target.id !== "auth-form") return;
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const email = String(f.get("email") || "").trim();
+      const password = String(f.get("password") || "");
+      const err = $("auth-error");
+      const btn = e.target.querySelector('[type="submit"]');
+      err.textContent = "";
+      if (!email) { err.textContent = "צריך למלא אימייל."; return; }
+      btn.disabled = true;
+      try {
+        if (loginMode === "up") {
+          const name = String(f.get("name") || "").trim();
+          if (!name) { err.textContent = "איך קוראים לך? זה יהיה השם של הספר."; btn.disabled = false; return; }
+          pendingName = name;
+          await cloud.signUp(name, email, password);
+        } else if (loginMode === "reset") {
+          await cloud.resetPassword(email);
+          loginMode = "in"; render(0); toast("שלחתי מייל לאיפוס הסיסמה");
+        } else {
+          await cloud.signIn(email, password);
+        }
+      } catch (ex) {
+        pendingName = "";
+        err.textContent = authError(ex);
+        btn.disabled = false;
+      }
+    });
+
+    $("sheet-modal").addEventListener("click", e => {
+      if (e.target.id === "sheet-modal") { closeSheet(); return; }
+      const b = e.target.closest("[data-sheet]");
+      if (!b) return;
+      if (b.dataset.sheet === "close") closeSheet();
+      else if (b.dataset.sheet === "delete") deleteEditingRecipe(b);
+    });
+    $("sheet-modal").addEventListener("change", e => {
+      if (e.target.id === "f-category") {
+        const isNew = e.target.value === "__new";
+        $("f-newcat-wrap").hidden = !isNew;
+        if (isNew) $("f-newcat").focus();
+      }
+    });
+    $("sheet-modal").addEventListener("submit", e => {
+      e.preventDefault();
+      if (e.target.id === "recipe-form") saveRecipeForm(e.target);
+      else if (e.target.id === "book-form") saveBookForm(e.target);
+    });
+    $("go-shelf").addEventListener("click", () => showShelf(true));
+  }
+
   // ---------- events ----------
   $("prev").addEventListener("click", () => go(current - 1));
   $("next").addEventListener("click", () => go(current + 1));
   $("go-toc").addEventListener("click", () => go(1));
   $("go-cover").addEventListener("click", () => go(0));
-  $("go-cover").textContent = BOOK.title;
+  $("go-cover").textContent = CLOUD_CONFIG ? "FoodLi" : BOOK.title;
 
   stage.addEventListener("click", async e => {
+    if (CLOUD_CONFIG && await handleCloudClick(e)) return;
     const g = e.target.closest("[data-go]");
     if (g) { go(+g.dataset.go); return; }
     const story = e.target.closest("[data-story]");
@@ -628,7 +1050,8 @@
 
   document.addEventListener("keydown", e => {
     if (!$("story-modal").hidden) { if (e.key === "Escape") closeStory(); return; }
-    if (e.target.matches && e.target.matches("input, textarea")) return;
+    if (!$("sheet-modal").hidden) { if (e.key === "Escape") closeSheet(); return; }
+    if (e.target.matches && e.target.matches("input, textarea, select")) return;
     if (e.key === "ArrowLeft") go(current + 1);      // RTL: left is forward
     else if (e.key === "ArrowRight") go(current - 1);
   });
@@ -643,7 +1066,7 @@
     if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) go(current + (dx > 0 ? 1 : -1));
   }, { passive: true });
 
-  window.addEventListener("hashchange", () => { const u = unitFromHash(); if (u !== current) { current = u; render(current); } });
+  window.addEventListener("hashchange", () => { if (view !== "book") return; const u = unitFromHash(); if (u !== current) { current = u; render(current); } });
   wideMQ.addEventListener && wideMQ.addEventListener("change", () => render(current));
 
   // keep the screen on while cooking
@@ -667,6 +1090,6 @@
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 
-  current = unitFromHash();
-  render(current);
+  if (CLOUD_CONFIG) startCloud();
+  else { current = unitFromHash(); render(current); }
 })();
