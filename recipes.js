@@ -91,6 +91,7 @@ window.RECIPES = [
   // ---------------- עיקריות ----------------
   {
     id: "stuffed-vine-leaves",
+    photo: "images/stuffed-vine-leaves.jpg",
     title: "עלי גפן ממולאים",
     category: "עיקריות",
     intro: "המתכון של נעמי, שנולדה בסוריה, כפי שדניאל עמית חילצה ממנה.",

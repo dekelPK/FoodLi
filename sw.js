@@ -2,7 +2,7 @@
 // up right away, and fall back to the saved copy when there is no connection.
 // Fonts and libraries never change, so those come straight from the saved copy.
 const CACHE = "foodli-v7";
-const CORE = ["./", "index.html", "images/salmon-cubes.jpg", "style.css", "app.js", "recipes.js", "friend.js", "cloud.js", "firebase-config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png"];
+const CORE = ["./", "index.html", "images/salmon-cubes.jpg", "images/stuffed-vine-leaves.jpg", "style.css", "app.js", "recipes.js", "friend.js", "cloud.js", "firebase-config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE.map(u => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
