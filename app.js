@@ -62,6 +62,7 @@
   let canUpload = false;
   let store = null;            // { save(id, blob), remove(id) }
   let photoNote = "";
+  let photosUnavailable = false;
 
   // Books built into the site (no accounts): recipes.js, plus any extra book files such as friend.js
   const staticBooks = CLOUD_CONFIG ? [] : [
@@ -113,7 +114,12 @@
       const tx = d.transaction("photos", "readonly").objectStore("photos");
       await new Promise(res => {
         const c = tx.openCursor();
-        c.onsuccess = () => { const cur = c.result; if (!cur) return res(); photos[cur.key] = URL.createObjectURL(cur.value); cur.continue(); };
+        c.onsuccess = () => {
+          const cur = c.result; if (!cur) return res();
+          const v = cur.value;   // a Blob (older saves) or {type, buf}
+          try { photos[cur.key] = URL.createObjectURL(v instanceof Blob ? v : new Blob([v.buf], { type: v.type || "image/jpeg" })); } catch (err) { /* skip a broken entry */ }
+          cur.continue();
+        };
         c.onerror = () => res();
       });
       const put = (id, v) => new Promise((res, rej) => {
@@ -121,14 +127,19 @@
         v ? s.put(v, id) : s.delete(id);
         t.oncomplete = res; t.onerror = () => rej(t.error);
       });
-      canUpload = !multiBook || (openBookId !== null && openBookId === myBookId);
+      // photos here live only on this phone, so any book can get them
+      canUpload = true;
       photoNote = "התמונה נשמרת רק בטלפון הזה.";
       store = {
-        async save(id, blob) { await put(id, blob); photos[id] = URL.createObjectURL(blob); },
+        // stored as plain bytes: some iPhone versions fail to keep Blobs in IndexedDB
+        async save(id, blob) { await put(id, { type: blob.type || "image/jpeg", buf: await blob.arrayBuffer() }); photos[id] = URL.createObjectURL(blob); },
         async remove(id) { await put(id, null); const r = recipes.find(x => x.id === id); if (r && r.photo) photos[id] = r.photo; else delete photos[id]; }
       };
       refreshPhotos();
-    } catch (e) { /* no storage: photos stay read-only */ }
+    } catch (e) {
+      photosUnavailable = true;   // e.g. storage blocked: say so instead of hiding the button silently
+      refreshPhotos();
+    }
   }
 
   if (CLOUD_CONFIG) { /* photos are loaded per book, see openBook() */ }
@@ -191,7 +202,9 @@
              <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="13" width="36" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="24" cy="26" r="7" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M17 13l3-5h8l3 5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></svg>
              <span>הוסיפי תמונה של המנה</span>${photoNote ? `<small>${esc(photoNote)}</small>` : ""}
            </button>`
-        : `<div class="photo-empty static"><span>${esc(r.title)}</span></div>`;
+        : photosUnavailable
+          ? `<div class="photo-empty"><span>אי אפשר לשמור תמונות בדפדפן הזה</span><small>בדרך כלל זה קורה במצב גלישה פרטית. פתחי את האתר בחלון רגיל ונסי שוב.</small></div>`
+          : `<div class="photo-empty static"><span>${esc(r.title)}</span></div>`;
     return `<figure class="polaroid${url ? " has-photo" : ""}" data-photo-for="${esc(r.id)}">
       <span class="tape" aria-hidden="true"></span>
       <div class="polaroid-img">${inner}</div>
@@ -1173,7 +1186,7 @@
     const b = staticBooks.find(x => x.id === id); if (!b) return;
     openBookId = id;
     setBook(b.book, b.recipes, true);   // local photos are keyed by recipe id, keep them all
-    canUpload = !!store && id === myBookId;
+    canUpload = !!store;
     try { localStorage.setItem("foodli-book", id); } catch (e) { /* ignore */ }
     view = "book"; query = ""; activeChapter = "";
     current = fromHash ? unitFromHash() : 0;

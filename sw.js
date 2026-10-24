@@ -1,5 +1,5 @@
 // Offline support: serve from cache, refresh the cache in the background.
-const CACHE = "foodli-v5";
+const CACHE = "foodli-v6";
 const CORE = ["./", "index.html", "style.css", "app.js", "recipes.js", "friend.js", "cloud.js", "firebase-config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
