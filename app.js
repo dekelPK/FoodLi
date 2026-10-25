@@ -535,13 +535,14 @@
   }
 
   // a white card with a marker-underlined heading
-  function storyCard(ctx, color, x, y, w, h, heading) {
+  function storyCard(ctx, color, x, y, w, h, heading, compact) {
     ctx.save(); ctx.shadowColor = "rgba(40,30,50,.12)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10;
     ctx.fillStyle = "#ffffff"; roundRect(ctx, x, y, w, h, 36); ctx.fill(); ctx.restore();
-    ctx.textAlign = "right"; ctx.fillStyle = INK; ctx.font = "700 84px Karantina, sans-serif";
+    ctx.textAlign = "right"; ctx.fillStyle = INK; ctx.font = `700 ${compact ? 68 : 84}px Karantina, sans-serif`;
     const hw = ctx.measureText(heading).width;
-    ctx.fillText(heading, x + w - 56, y + 104);
-    ctx.fillStyle = color; ctx.fillRect(x + w - 56 - hw, y + 116, hw, 10);
+    const base = compact ? 82 : 104;
+    ctx.fillText(heading, x + w - 56, y + base);
+    ctx.fillStyle = color; ctx.fillRect(x + w - 56 - hw, y + base + 12, hw, compact ? 8 : 10);
   }
 
   // numbered steps: measure (draw = false) or draw them from `top`
@@ -588,96 +589,142 @@
     const first = storyCanvas(color);
     const ctx = first.ctx;
 
-    let y = 170;
     const items = (r.ingredients || []).map(s => String(s).trim()).filter(s => s && !isSub(s));
     const imgSrc = photos[r.id];
     const img = imgSrc ? await loadImage(imgSrc) : null;
+    const metaLine = [r.category, r.time, r.servings].filter(Boolean).join("  ·  ");
+    const cardX = 90, cardW = W - 180, stepsW = cardW - 112;
+
+    // Lay out the first image for a given photo size, without drawing.
+    // compact: smaller card headings and gaps, used when trying to fit everything on one image.
+    function plan(pw, ph, compact, titleOverride) {
+      const pad = compact ? 170 : 210, cardGap = compact ? 28 : 40, contentTop = compact ? 130 : 170;
+      const top0 = img ? 170 + ph + (compact ? 50 : 70) : 230;
+      const titleSize = titleOverride || (img ? (ph <= 520 || items.length > 12 ? 110 : 130) : 190);
+      ctx.font = `700 ${titleSize}px Karantina, sans-serif`;
+      const titleLines = wrapLines(ctx, r.title, W - 160).slice(0, 2);
+      const headH = titleLines.length * titleSize * 0.85 + 20 + (metaLine ? 70 : 0) + (compact ? 36 : 50);
+      const maxH = H - footer - top0 - headH - pad;
+      let colW = 0;
+      const layout = (size, cols, truncate) => {
+        colW = (cardW - 112 - (cols - 1) * 40) / cols;
+        ctx.font = `600 ${size}px Assistant, sans-serif`;
+        const lh = size * 1.32; const per = items.map(t => wrapLines(ctx, t, colW - 34));
+        const needs = per.map(ls => ls.length * lh + size * 0.35);
+        if (cols === 2 && !truncate) {
+          // split evenly: the first part in the right column, the rest in the left one
+          if (per.length < 4) return null;
+          const total = needs.reduce((a, b) => a + b, 0);
+          let best = null, acc = 0;
+          for (let k = 1; k < per.length; k++) {
+            acc += needs[k - 1];
+            const m = Math.max(acc, total - acc);
+            if (!best || m < best.m) best = { k, m };
+          }
+          if (best.m > maxH) return null;
+          return { colsOut: [per.slice(0, best.k), per.slice(best.k)], lh, size, used: best.m, colW, cut: false };
+        }
+        const colsOut = [[]]; const heights = [0]; let cut = false;
+        for (let i = 0; i < per.length; i++) {
+          const need = needs[i];
+          if (heights[heights.length - 1] + need > maxH) {
+            if (colsOut.length >= cols) {
+              if (!truncate) return null;
+              colsOut[colsOut.length - 1].pop();   // make room for the "and N more" line
+              colsOut[colsOut.length - 1].push([`ועוד ${per.length - i + 1} מצרכים בספר…`]);
+              cut = true;
+              break;
+            }
+            colsOut.push([]); heights.push(0);
+          }
+          colsOut[colsOut.length - 1].push(per[i]); heights[heights.length - 1] += need;
+        }
+        return { colsOut, lh, size, used: Math.max(...heights), colW, cut };
+      };
+      // ingredient layouts from roomiest to most compact: one column, then two columns, smaller type
+      const options = [];
+      if (items.length && maxH > 80) {
+        for (let fs = 42; fs >= 36; fs -= 2) options.push([fs, 1]);
+        for (let fs = 40; fs >= 30; fs -= 2) options.push([fs, 2]);
+      }
+      const stepsFit = cardH => {
+        const room = H - footer - top0 - headH - (cardH ? cardH + cardGap : 0) - pad;
+        for (let fs = 38; fs >= (compact ? 32 : 34); fs -= 2) {
+          const blocks = stepBlocks(ctx, steps, fs, stepsW);
+          const used = blocks.reduce((a, b) => a + b.h, 0);
+          if (used <= room) return { blocks, size: fs, h: pad + used };
+        }
+        return null;
+      };
+      // take the roomiest ingredient layout that still leaves space for the steps on this image;
+      // if none does, the roomiest one that fits by itself (the steps then go on extra images)
+      let L = null, inline = null, firstFit = null;
+      for (const [fs, cols] of options) {
+        const l = layout(fs, cols);
+        if (!l) continue;
+        if (!firstFit) firstFit = l;
+        if (!steps.length) { L = l; break; }
+        const st = stepsFit(pad + l.used);
+        if (st) { L = l; inline = st; break; }
+      }
+      if (!L) L = firstFit || (items.length && maxH > 80 ? layout(30, 2, true) : null);
+      const cardH = L ? pad + L.used : 0;
+      if (!inline && steps.length && !items.length) inline = stepsFit(0);
+      const fitsAll = (!items.length || (L && !L.cut)) && (!steps.length || !!inline);
+      return { pw, ph, compact, pad, cardGap, contentTop, top0, titleSize, titleLines, headH, L, cardH, inline, fitsAll };
+    }
+
+    // Prefer one image: try the photo (or the title, when there is no photo) at shrinking sizes and
+    // keep the layout with the most readable text; otherwise keep the big photo and add step pages.
+    const sizes = img
+      ? [[820, 700], [760, 620], [700, 540], [640, 460], [580, 400]].map(([pw, ph]) => [pw, ph, 0])
+      : [190, 150, 120].map(t => [0, 0, t]);
+    const score = t => (t.L ? t.L.size : 40) + (t.inline ? t.inline.size : 40) + t.ph / 200 + t.titleSize / 100 - (t.compact ? 1 : 0);
+    let P = null;
+    for (const compact of [false, true]) {
+      for (const [pw, ph, ts] of sizes) {
+        const t = plan(pw, ph, compact, ts);
+        if (t.fitsAll && (!P || score(t) > score(P))) P = t;
+      }
+    }
+    if (!P) P = img ? plan(items.length > 12 ? 700 : 820, items.length > 12 ? 560 : 700, false) : plan(0, 0, false);
+    const { L, cardH, inline, titleSize, titleLines, cardGap } = P;
+
+    let y = 170;
     if (img) {
       // polaroid
-      const pw = items.length > 12 ? 700 : 820, ph = items.length > 12 ? 560 : 700, px = (W - pw) / 2;
+      const pw = P.pw, ph = P.ph, px = (W - pw) / 2;
       ctx.save(); ctx.translate(W / 2, y + ph / 2); ctx.rotate(-0.035); ctx.translate(-W / 2, -(y + ph / 2));
       ctx.shadowColor = "rgba(40,30,50,.25)"; ctx.shadowBlur = 40; ctx.shadowOffsetY = 18;
       ctx.fillStyle = "#ffffff"; ctx.fillRect(px, y, pw, ph); ctx.shadowColor = "transparent";
-      const iw = pw - 60, ih = ph - 140, ix = px + 30, iy = y + 30;
+      const capH = ph >= 600 ? 140 : 110;
+      const iw = pw - 60, ih = ph - capH, ix = px + 30, iy = y + 30;
       const k = Math.max(iw / img.naturalWidth, ih / img.naturalHeight);
       const sw = iw / k, sh = ih / k;
       ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, ix, iy, iw, ih);
-      ctx.fillStyle = INK; ctx.textAlign = "center"; ctx.font = "700 58px 'Amatic SC', sans-serif";
-      ctx.fillText(r.title, W / 2, y + ph - 40);
+      ctx.fillStyle = INK; ctx.textAlign = "center"; ctx.font = `700 ${ph >= 600 ? 58 : 50}px 'Amatic SC', sans-serif`;
+      ctx.fillText(r.title, W / 2, y + ph - (ph >= 600 ? 40 : 30));
       ctx.restore();
       // washi tape
       ctx.save(); ctx.translate(W / 2, y + 4); ctx.rotate(0.06);
       ctx.globalAlpha = 0.8; ctx.fillStyle = color; ctx.fillRect(-120, -26, 240, 52); ctx.restore();
-      y += ph + 70;
+      y = P.top0;
     } else {
-      y += 60;
+      y = 170 + Math.max(0, (H - footer - 170 - P.headH - cardH - (inline ? cardGap + inline.h : 0)) / 2);
     }
-
-    // title + meta
-    const titleSize = img ? (items.length > 12 ? 110 : 130) : 190;
-    ctx.font = `700 ${titleSize}px Karantina, sans-serif`;
-    const titleLines = wrapLines(ctx, r.title, W - 160).slice(0, 2);
-    const metaLine = [r.category, r.time, r.servings].filter(Boolean).join("  ·  ");
-    const headH = titleLines.length * titleSize * 0.85 + 20 + (metaLine ? 70 : 0) + 50;
-
-    // ingredients layout (measured first so the card hugs its content)
-    const cardX = 90, cardW = W - 180, pad = 210, cardGap = 40;
-    const maxH = H - footer - y - headH - pad;
-    let colW = 0;
-    const layout = (size, cols, truncate) => {
-      colW = (cardW - 112 - (cols - 1) * 40) / cols;
-      ctx.font = `600 ${size}px Assistant, sans-serif`;
-      const lh = size * 1.32; const per = items.map(t => wrapLines(ctx, t, colW - 34));
-      const colsOut = [[]]; const heights = [0];
-      for (let i = 0; i < per.length; i++) {
-        const need = per[i].length * lh + size * 0.35;
-        if (heights[heights.length - 1] + need > maxH) {
-          if (colsOut.length >= cols) {
-            if (!truncate) return null;
-            colsOut[colsOut.length - 1].pop();   // make room for the "and N more" line
-            colsOut[colsOut.length - 1].push([`ועוד ${per.length - i + 1} מצרכים בספר…`]);
-            break;
-          }
-          colsOut.push([]); heights.push(0);
-        }
-        colsOut[colsOut.length - 1].push(per[i]); heights[heights.length - 1] += need;
-      }
-      return { colsOut, lh, size, used: Math.max(...heights) };
-    };
-    let L = null;
-    if (items.length && maxH > 80) {
-      // one column if it fits in large type, otherwise two columns, shrinking the type as needed
-      for (let fs = 42; fs >= 36 && !L; fs -= 2) L = layout(fs, 1);
-      for (let fs = 40; fs >= 30 && !L; fs -= 2) L = layout(fs, 2);
-      if (!L) L = layout(30, 2, true);
-    }
-    const cardH = L ? pad + L.used : 0;
-
-    // do the steps fit under the ingredients on this same image?
-    const stepsW = cardW - 112;
-    let inline = null;
-    if (steps.length) {
-      const room = H - footer - (img ? y : 170) - headH - (cardH ? cardH + cardGap : 0) - 210;
-      for (let fs = 38; fs >= 34 && !inline; fs -= 2) {
-        const blocks = stepBlocks(ctx, steps, fs, stepsW);
-        const used = blocks.reduce((a, b) => a + b.h, 0);
-        if (used <= room) inline = { blocks, size: fs, h: 210 + used };
-      }
-    }
-    if (!img) y = 170 + Math.max(0, (H - footer - 170 - headH - cardH - (inline ? cardGap + inline.h : 0)) / 2);
 
     ctx.fillStyle = INK; ctx.textAlign = "center";
     ctx.font = `700 ${titleSize}px Karantina, sans-serif`;
     titleLines.forEach(l => { y += titleSize * 0.85; ctx.fillText(l, W / 2, y); });
     y += 20;
     if (metaLine) { ctx.fillStyle = color; ctx.font = "700 60px 'Amatic SC', sans-serif"; y += 70; ctx.fillText(metaLine, W / 2, y); }
-    y += 50;
+    y += P.compact ? 36 : 50;
 
     if (L) {
-      storyCard(ctx, color, cardX, y, cardW, cardH, "מה צריך");
-      const top = y + 170;
+      storyCard(ctx, color, cardX, y, cardW, cardH, "מה צריך", P.compact);
+      const top = y + P.contentTop;
       L.colsOut.forEach((col, ci) => {
-        const xr = cardX + cardW - 56 - ci * (colW + 40);
+        const xr = cardX + cardW - 56 - ci * (L.colW + 40);
         let yy = top;
         col.forEach(ls => {
           ctx.fillStyle = color; ctx.beginPath(); ctx.arc(xr - 8, yy + L.size * 0.62, 7, 0, Math.PI * 2); ctx.fill();
@@ -689,8 +736,8 @@
       y += cardH + cardGap;
     }
     if (inline) {
-      storyCard(ctx, color, cardX, y, cardW, inline.h, "איך מכינים");
-      drawSteps(ctx, color, inline.blocks, 1, inline.size, cardX + cardW - 56, y + 170);
+      storyCard(ctx, color, cardX, y, cardW, inline.h, "איך מכינים", P.compact);
+      drawSteps(ctx, color, inline.blocks, 1, inline.size, cardX + cardW - 56, y + P.contentTop);
     }
 
     // more images for the steps, split into pages
