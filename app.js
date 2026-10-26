@@ -109,7 +109,98 @@
       rq.onerror = () => rej(rq.error);
     });
   }
+  // ======================================================
+  //  Photos on the website
+  //  Built-in photos come from the recipe files ("photo"), shared uploads from photos.json in the
+  //  repository (written through the GitHub API with a key pasted once on the phone), and photos
+  //  added without a key stay in this browser only (IndexedDB).
+  // ======================================================
+  const GH_REPO = "dekelPK/FoodLi", GH_BRANCH = "master";
+  let ghToken = null;
+  try { ghToken = localStorage.getItem("foodli-gh-token"); } catch (e) { /* ignore */ }
+  const sharedPhotos = {};     // recipeId -> {path, ts}   from photos.json
+  const localPhotos = {};      // recipeId -> {url, ts}    from this browser
+
+  function applyPhotos() {
+    Object.keys(photos).forEach(k => delete photos[k]);
+    staticBooks.forEach(b => b.recipes.forEach(r => { if (r.photo) photos[r.id] = r.photo; }));
+    Object.entries(sharedPhotos).forEach(([id, v]) => { photos[id] = v.path; });
+    // this phone's own copy wins while it is newer (a fresh upload takes a minute to reach the site)
+    Object.entries(localPhotos).forEach(([id, v]) => { if (!sharedPhotos[id] || (v.ts || 0) >= sharedPhotos[id].ts) photos[id] = v.url; });
+    refreshPhotos();
+  }
+
+  async function loadSharedPhotos() {
+    try {
+      const res = await fetch("photos.json?t=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) return;
+      const map = await res.json();
+      Object.keys(sharedPhotos).forEach(k => delete sharedPhotos[k]);
+      Object.entries(map || {}).forEach(([id, v]) => {
+        if (v && typeof v.path === "string" && /^images\/[\w./-]+$/.test(v.path)) sharedPhotos[id] = { path: v.path, ts: Number(v.ts) || 0 };
+      });
+      applyPhotos();
+    } catch (e) { /* offline: keep what we have */ }
+  }
+
+  const ghError = status => Object.assign(new Error("github " + status), { code: status === 401 || status === 403 || status === 404 ? "gh_auth" : "gh" });
+  async function ghApi(path, opts = {}, token = ghToken) {
+    return fetch(`https://api.github.com/repos/${GH_REPO}${path}`, {
+      ...opts,
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", ...(opts.body ? { "Content-Type": "application/json" } : {}) }
+    });
+  }
+  const toB64 = str => btoa(unescape(encodeURIComponent(str)));
+  const fromB64 = b64 => decodeURIComponent(escape(atob(String(b64).replace(/\n/g, ""))));
+
+  // read photos.json, change it, write it back (retrying if someone else wrote in between)
+  async function ghUpdatePhotoMap(change, message) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const g = await ghApi(`/contents/photos.json?ref=${GH_BRANCH}`);
+      let map = {}, sha;
+      if (g.ok) { const j = await g.json(); sha = j.sha; try { map = JSON.parse(fromB64(j.content)) || {}; } catch (e) { map = {}; } }
+      else if (g.status !== 404) throw ghError(g.status);
+      change(map);
+      const p = await ghApi("/contents/photos.json", { method: "PUT", body: JSON.stringify({ message, branch: GH_BRANCH, content: toB64(JSON.stringify(map, null, 2) + "\n"), ...(sha ? { sha } : {}) }) });
+      if (p.ok) return map;
+      if (p.status !== 409 && p.status !== 422) throw ghError(p.status);
+    }
+    throw ghError(409);
+  }
+
+  async function ghSavePhoto(id, blob, ts) {
+    const r = staticBooks.flatMap(b => b.recipes).find(x => x.id === id);
+    const path = `images/uploads/${id}-${ts}.jpg`;
+    const content = (await blobToDataURL(blob)).split(",")[1];
+    const up = await ghApi(`/contents/${path}`, { method: "PUT", body: JSON.stringify({ message: `תמונה: ${r ? r.title : id}`, branch: GH_BRANCH, content }) });
+    if (!up.ok) throw ghError(up.status);
+    const old = sharedPhotos[id];
+    await ghUpdatePhotoMap(map => { map[id] = { path, ts }; }, `תמונה: ${r ? r.title : id}`);
+    sharedPhotos[id] = { path, ts };
+    if (old && old.path.startsWith("images/uploads/")) ghDeleteFile(old.path).catch(() => {});
+  }
+
+  async function ghDeleteFile(path) {
+    const g = await ghApi(`/contents/${path}?ref=${GH_BRANCH}`);
+    if (!g.ok) return;
+    const { sha } = await g.json();
+    await ghApi(`/contents/${path}`, { method: "DELETE", body: JSON.stringify({ message: "הסרת תמונה", sha, branch: GH_BRANCH }) });
+  }
+
+  async function ghRemovePhoto(id) {
+    const old = sharedPhotos[id];
+    await ghUpdatePhotoMap(map => { delete map[id]; }, "הסרת תמונה");
+    delete sharedPhotos[id];
+    if (old && old.path.startsWith("images/uploads/")) ghDeleteFile(old.path).catch(() => {});
+  }
+
+  function setPhotoNote() {
+    photoNote = ghToken ? "התמונה תופיע אצל כולן תוך כדקה." : "התמונה נשמרת רק בטלפון הזה.";
+  }
+
   async function initLocalStore() {
+    const fromSite = !CLOUD_CONFIG && staticBooks.length > 0;
+    if (fromSite) loadSharedPhotos();
     try {
       const d = await idb();
       const tx = d.transaction("photos", "readonly").objectStore("photos");
@@ -117,29 +208,41 @@
         const c = tx.openCursor();
         c.onsuccess = () => {
           const cur = c.result; if (!cur) return res();
-          const v = cur.value;   // a Blob (older saves) or {type, buf}
-          try { photos[cur.key] = URL.createObjectURL(v instanceof Blob ? v : new Blob([v.buf], { type: v.type || "image/jpeg" })); } catch (err) { /* skip a broken entry */ }
+          const v = cur.value;   // a Blob (older saves) or {type, buf, ts}
+          try { localPhotos[cur.key] = { url: URL.createObjectURL(v instanceof Blob ? v : new Blob([v.buf], { type: v.type || "image/jpeg" })), ts: (v && v.ts) || 0 }; } catch (err) { /* skip a broken entry */ }
           cur.continue();
         };
         c.onerror = () => res();
       });
       const put = (id, v) => new Promise((res, rej) => {
-        const t = d.transaction("photos", "readwrite"); const s = t.objectStore("photos");
-        v ? s.put(v, id) : s.delete(id);
+        const t = d.transaction("photos", "readwrite"); const st = t.objectStore("photos");
+        v ? st.put(v, id) : st.delete(id);
         t.oncomplete = res; t.onerror = () => rej(t.error);
       });
-      // photos here live only on this phone, so any book can get them
       canUpload = true;
-      photoNote = "התמונה נשמרת רק בטלפון הזה.";
+      setPhotoNote();
       store = {
         // stored as plain bytes: some iPhone versions fail to keep Blobs in IndexedDB
-        async save(id, blob) { await put(id, { type: blob.type || "image/jpeg", buf: await blob.arrayBuffer() }); photos[id] = URL.createObjectURL(blob); },
-        async remove(id) { await put(id, null); const r = recipes.find(x => x.id === id); if (r && r.photo) photos[id] = r.photo; else delete photos[id]; }
+        async save(id, blob) {
+          const ts = Date.now();
+          await put(id, { type: blob.type || "image/jpeg", buf: await blob.arrayBuffer(), ts });
+          localPhotos[id] = { url: URL.createObjectURL(blob), ts };
+          applyPhotos();
+          if (ghToken) await ghSavePhoto(id, blob, ts);
+        },
+        async remove(id) {
+          if (ghToken && sharedPhotos[id]) await ghRemovePhoto(id);
+          await put(id, null);
+          delete localPhotos[id];
+          applyPhotos();
+        },
+        // a shared photo can only be taken down by someone holding the key
+        canRemove: id => !!localPhotos[id] || (!!ghToken && !!sharedPhotos[id])
       };
-      refreshPhotos();
+      applyPhotos();
     } catch (e) {
       photosUnavailable = true;   // e.g. storage blocked: say so instead of hiding the button silently
-      refreshPhotos();
+      applyPhotos();
     }
   }
 
@@ -181,6 +284,8 @@
       setPhotoBusy(id, code === "too_large" ? "התמונה גדולה מדי. נסי תמונה אחרת." :
         code === "quota_or_state" ? "אין מקום לעוד תמונות." :
         code === "decode" || (e && e.message === "decode") ? "לא הצלחתי לקרוא את הקובץ. נסי תמונה בפורמט JPG או PNG." :
+        code === "gh_auth" ? "התמונה נשמרה בטלפון, אבל המפתח לשיתוף לא עובד. אפשר לחבר מפתח חדש במדף." :
+        code === "gh" ? "התמונה נשמרה בטלפון, אבל השיתוף עם כולן לא הצליח. נסי שוב כשיש אינטרנט." :
         "ההעלאה לא הצליחה. נסי שוב בעוד רגע.", true);
     }
   });
@@ -193,7 +298,7 @@
     const url = photos[r.id];
     const controls = canUpload
       ? (url
-        ? `<div class="photo-tools"><button type="button" class="mini-btn" data-photo-pick="${esc(r.id)}">החלפה</button>${url !== r.photo ? `<button type="button" class="mini-btn" data-photo-remove="${esc(r.id)}">הסרה</button>` : ""}</div>`
+        ? `<div class="photo-tools"><button type="button" class="mini-btn" data-photo-pick="${esc(r.id)}">החלפה</button>${(store && store.canRemove ? store.canRemove(r.id) : url !== r.photo) ? `<button type="button" class="mini-btn" data-photo-remove="${esc(r.id)}">הסרה</button>` : ""}</div>`
         : "")
       : "";
     const inner = url
@@ -211,7 +316,7 @@
       <div class="polaroid-img">${inner}</div>
       <figcaption>${url ? esc(r.title) : ""}<span class="polaroid-msg" role="status"></span></figcaption>
       ${controls}
-    </figure>`;
+    </figure>${canUpload && !CLOUD_CONFIG && !window.claude && !ghToken ? `<button type="button" class="link-btn share-photos-link" data-action="gh-connect">איך משתפים את התמונות עם כולן?</button>` : ""}`;
   }
 
   function refreshPhotos() {
@@ -222,7 +327,10 @@
     });
     stage.querySelectorAll("[data-photo-for]").forEach(fig => {
       const r = recipes.find(x => x.id === fig.dataset.photoFor);
-      if (r) fig.outerHTML = polaroidHTML(r);
+      if (!r) return;
+      const next = fig.nextElementSibling;
+      if (next && next.classList.contains("share-photos-link")) next.remove();
+      fig.outerHTML = polaroidHTML(r);
     });
     stage.querySelectorAll("[data-thumb-for]").forEach(t => {
       const url = photos[t.dataset.thumbFor];
@@ -1234,6 +1342,8 @@
         <div class="shelf-grid">${books.map(card).join("")}</div>
         ${myBookId ? `<div class="shelf-foot"><span class="me-line">הספר שלך בטלפון הזה: ${esc(who(staticBooks.find(b => b.id === myBookId)))}</span>
           <button class="sticker-btn small" type="button" data-action="change-me">זה לא הספר שלי</button></div>` : ""}
+        <div class="shelf-foot"><span class="me-line">${ghToken ? "הטלפון הזה משתף תמונות עם כולן" : "תמונות מהטלפון הזה נשמרות רק בו"}</span>
+          <button class="sticker-btn small" type="button" data-action="gh-connect">${ghToken ? "שיתוף תמונות: מחובר" : "שיתוף תמונות עם כולן"}</button></div>
       </div>
     </section>`;
   }
@@ -1275,6 +1385,82 @@
     return false;
   }
 
+
+  // ======================================================
+  //  Connecting this phone so photos are shared with everyone (GitHub key)
+  // ======================================================
+  function ghConnectHTML() {
+    if (ghToken) return `<div class="editor">
+      <h2 class="display editor-title">שיתוף תמונות</h2>
+      <p>הטלפון הזה מחובר. כל תמונה שמעלים ממנו מופיעה אצל כולן תוך כדקה.</p>
+      <div class="editor-actions">
+        <button class="sticker-btn" type="button" data-sheet="close">סגירה</button>
+        <button class="sticker-btn danger" type="button" data-sheet="gh-disconnect">ניתוק הטלפון</button>
+      </div>
+    </div>`;
+    return `<form class="editor" id="gh-form" novalidate>
+      <h2 class="display editor-title">שיתוף תמונות עם כולן</h2>
+      <p>כדי שתמונה שמעלים מהטלפון תופיע גם אצל אחרות, האפליקציה צריכה מפתח שמרשה לה לשמור תמונות באתר. עושים את זה פעם אחת בכל טלפון:</p>
+      <ol class="how-to">
+        <li>נכנסים ל־<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">יצירת מפתח ב־GitHub</a> (מחוברת לחשבון של דקל).</li>
+        <li>ב־<b>Token name</b> כותבים FoodLi, וב־<b>Expiration</b> בוחרים את התוקף הכי ארוך.</li>
+        <li>ב־<b>Repository access</b> בוחרים <b>Only select repositories</b> ואז <b>FoodLi</b>.</li>
+        <li>ב־<b>Permissions</b> מוסיפים את <b>Contents</b> (לפעמים דרך הכפתור <b>Add permissions</b>) ובוחרים <b>Read and write</b>.</li>
+        <li>לוחצים <b>Generate token</b>, מעתיקים את המפתח ומדביקים כאן.</li>
+      </ol>
+      <label class="field"><span>המפתח</span><input id="gh-token" name="token" type="password" dir="ltr" autocomplete="off" placeholder="github_pat_…" required></label>
+      <p class="form-error" id="gh-error" role="alert"></p>
+      <p class="modal-hint">מי שמחזיקה במפתח יכולה לשנות קבצים באתר, אז שולחים אותו רק לחברות שמעלות תמונות.</p>
+      <div class="editor-actions">
+        <button class="sticker-btn primary big" type="submit">חיבור</button>
+        <button class="sticker-btn" type="button" data-sheet="close">ביטול</button>
+      </div>
+    </form>`;
+  }
+
+  async function connectGitHub(form) {
+    const token = String(new FormData(form).get("token") || "").trim();
+    const err = $("gh-error"), btn = form.querySelector('[type="submit"]');
+    if (!token) { err.textContent = "צריך להדביק את המפתח."; return; }
+    btn.disabled = true; err.textContent = "";
+    try {
+      const res = await ghApi("", {}, token);
+      if (!res.ok) { err.textContent = res.status === 401 ? "המפתח לא נכון. בדקי שהעתקת את כולו." : "המפתח לא נותן גישה ל־FoodLi. בדקי שבחרת את המאגר הזה."; btn.disabled = false; return; }
+      const repo = await res.json();
+      if (repo.permissions && repo.permissions.push === false) { err.textContent = "למפתח אין הרשאה לשמור. ב־Contents צריך לבחור Read and write."; btn.disabled = false; return; }
+      ghToken = token;
+      try { localStorage.setItem("foodli-gh-token", token); } catch (e) { /* ignore */ }
+      setPhotoNote(); closeSheet(); render(current); applyPhotos();
+      toast("מעכשיו התמונות שתעלי יופיעו אצל כולן");
+    } catch (e) {
+      err.textContent = "אין חיבור לאינטרנט. נסי שוב."; btn.disabled = false;
+    }
+  }
+
+  function handleSiteClick(e) {
+    if (!e.target.closest('[data-action="gh-connect"]')) return false;
+    openSheet(ghConnectHTML(), ghToken ? null : "gh-token");
+    return true;
+  }
+
+  if (!CLOUD_CONFIG && !window.claude) {
+    $("sheet-modal").addEventListener("click", e => {
+      if (e.target.id === "sheet-modal") { closeSheet(); return; }
+      const b = e.target.closest("[data-sheet]"); if (!b) return;
+      if (b.dataset.sheet === "close") closeSheet();
+      else if (b.dataset.sheet === "gh-disconnect") {
+        ghToken = null;
+        try { localStorage.removeItem("foodli-gh-token"); } catch (err) { /* ignore */ }
+        setPhotoNote(); closeSheet(); render(current); applyPhotos();
+        toast("הטלפון נותק משיתוף התמונות");
+      }
+    });
+    $("sheet-modal").addEventListener("submit", e => {
+      if (e.target.id !== "gh-form") return;
+      e.preventDefault(); connectGitHub(e.target);
+    });
+  }
+
   // ---------- events ----------
   $("prev").addEventListener("click", () => go(current - 1));
   $("next").addEventListener("click", () => go(current + 1));
@@ -1285,6 +1471,7 @@
   stage.addEventListener("click", async e => {
     if (CLOUD_CONFIG && await handleCloudClick(e)) return;
     if (multiBook && handleShelfClick(e)) return;
+    if (!CLOUD_CONFIG && !window.claude && handleSiteClick(e)) return;
     const g = e.target.closest("[data-go]");
     if (g) { go(+g.dataset.go); return; }
     const story = e.target.closest("[data-story]");
