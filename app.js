@@ -1418,8 +1418,8 @@
   //  added-recipes.json: { bookId: { recipes: { id: recipe }, deleted: [ids] } }
   // ======================================================
   let addedRecipes = {};
-  let claudeKey = null;
-  try { claudeKey = localStorage.getItem("foodli-claude-key"); } catch (e) { /* ignore */ }
+  // an earlier version could keep a paid Claude key on the phone: remove it if it is there
+  try { localStorage.removeItem("foodli-claude-key"); } catch (e) { /* ignore */ }
 
   // editing is for a connected phone, in the book that belongs to whoever uses it
   function canEditHere() {
@@ -1474,27 +1474,14 @@
   function aiBoxHTML() {
     return `<div class="ai-box">
       <span class="ai-title">יש לך מתכון מוכן?</span>
-      <p class="modal-hint">הדביקי אותו כאן${claudeKey ? " או צרפי צילום מסך" : ""}, והשדות למטה יתמלאו לבד.</p>
+      <p class="modal-hint">הדביקי אותו כאן, והשדות למטה יתמלאו לבד לפי הכותרות (מצרכים, אופן ההכנה, טיפ) והשורות.</p>
       <textarea id="f-paste" rows="5" placeholder="הדביקי כאן את המתכון…"></textarea>
-      ${claudeKey ? `<label class="sticker-btn small shot-btn"><input type="file" id="f-shot" accept="image/*" hidden>צירוף צילום מסך</label><span class="shot-name" id="f-shot-name"></span>` : ""}
-      <button class="sticker-btn primary" type="button" data-sheet="ai-fill">${claudeKey ? "Claude, סדר לי את המתכון" : "סידור אוטומטי"}</button>
+      <button class="sticker-btn primary" type="button" data-sheet="ai-fill">סידור אוטומטי</button>
       <p class="ai-status" id="ai-status" role="status"></p>
-      <details class="claude-key">
-        <summary>${claudeKey ? "Claude מחובר בטלפון הזה" : "רוצה ש־Claude יסדר, גם מצילום מסך?"}</summary>
-        ${claudeKey
-          ? `<button class="sticker-btn small danger" type="button" data-sheet="claude-forget">ניתוק Claude</button>`
-          : `<ol class="how-to">
-              <li>נכנסים ל־<a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> ונרשמים. זה חשבון נפרד מהמנוי של Claude.</li>
-              <li>ב־<b>Billing</b> מוסיפים קרדיט. 5 דולר מספיקים להרבה מאוד מתכונים.</li>
-              <li>ב־<b>API Keys</b> לוחצים <b>Create Key</b>, מעתיקים ומדביקים כאן.</li>
-            </ol>
-            <label class="field"><span>מפתח Claude</span><input id="f-claude-key" type="password" dir="ltr" autocomplete="off" placeholder="sk-ant-…"></label>
-            <button class="sticker-btn small" type="button" data-sheet="claude-save">שמירת המפתח</button>`}
-      </details>
     </div>`;
   }
 
-  // ---- sorting a pasted recipe without Claude: by headings and lines
+  // ---- sorting a pasted recipe by headings and lines
   function parseRecipeText(text) {
     const lines = text.split(/\r?\n/).map(l => l.replace(/^[\s•\-–*·●▪️✨❤️]+/u, "").trim()).filter(Boolean);
     const out = { title: "", ingredients: [], steps: [], tips: [] };
@@ -1514,73 +1501,6 @@
     return out;
   }
 
-  // ---- sorting with Claude (the key stays on this phone and is sent only to Anthropic)
-  const RECIPE_SCHEMA = {
-    type: "object", additionalProperties: false,
-    required: ["title", "category", "time", "servings", "intro", "ingredients", "steps", "tips"],
-    properties: {
-      title: { type: "string" }, category: { type: "string" }, time: { type: "string" }, servings: { type: "string" },
-      intro: { type: "string" },
-      ingredients: { type: "array", items: { type: "string" } },
-      steps: { type: "array", items: { type: "string" } },
-      tips: { type: "array", items: { type: "string" } }
-    }
-  };
-  const RECIPE_SYSTEM = `You turn a recipe into a clean card for a Hebrew family cookbook. The recipe comes as pasted text and/or a screenshot, usually Hebrew, often an Instagram caption.
-
-Write everything in Hebrew. Keep every amount, temperature and time exactly as the source gives it, and never invent amounts, ingredients or steps; if something is missing, leave it out.
-
-- title: the dish name only.
-- category: the best fitting chapter from the list you are given; only when none fits, a short new chapter name.
-- time, servings: short, only when stated or clearly adding up from stated times; otherwise an empty string.
-- intro: at most one short sentence worth keeping from the author; otherwise an empty string.
-- ingredients: one item per string, amount first, e.g. "2 כוסות קמח". When the recipe has parts (dough, sauce, filling, coating), start each part with a heading string ending in a colon, e.g. "לרוטב:".
-- steps: one action per step, in present-tense plural like "מערבבים", "מוסיפים". Split long paragraphs into separate steps. No numbering.
-- tips: the author's notes, substitutions and serving suggestions, one per string.
-- Leave out hashtags, emojis, greetings, requests to follow or tag, and the author's personal story.
-- Write number ranges with a plain hyphen, e.g. "2-3".`;
-
-  let AnthropicSDK = null;
-  async function claudeRecipe(text, file) {
-    if (!AnthropicSDK) AnthropicSDK = (await import("./vendor/anthropic-sdk-0.135.0.mjs")).default;
-    const client = new AnthropicSDK({ apiKey: claudeKey, dangerouslyAllowBrowser: true });
-    const content = [];
-    if (file) {
-      const jpeg = await shrinkImage(file, 1568, 0.85);
-      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await blobToDataURL(jpeg)).split(",")[1] } });
-    }
-    content.push({ type: "text", text: `${text ? "המתכון:\n" + text : "המתכון נמצא בצילום המסך."}\n\nהפרקים בספר: ${chapterOrder.join(", ")}` });
-    const params = {
-      model: "claude-opus-5-5", max_tokens: 16000, system: RECIPE_SYSTEM,
-      messages: [{ role: "user", content }],
-      output_config: { effort: "low", format: { type: "json_schema", schema: RECIPE_SCHEMA } }
-    };
-    let res;
-    try {
-      // if a safety check declines, the API retries on its recommended fallback model
-      res = await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" });
-    } catch (e) {
-      if (e && e.status === 400 && !/credit/i.test(e.message || "")) res = await client.messages.create(params);
-      else throw e;
-    }
-    if (res.stop_reason === "refusal") throw Object.assign(new Error("refusal"), { code: "refusal" });
-    if (res.stop_reason === "max_tokens") throw Object.assign(new Error("too long"), { code: "too_long" });
-    const block = res.content.find(b => b.type === "text");
-    if (!block) throw Object.assign(new Error("empty"), { code: "empty" });
-    return JSON.parse(block.text);
-  }
-
-  function claudeErrorText(e) {
-    const status = e && e.status, msg = (e && e.message) || "";
-    if (status === 401) return "המפתח של Claude לא עובד. בדקי שהעתקת את כולו, או צרי מפתח חדש.";
-    if (/credit/i.test(msg)) return "נגמר הקרדיט בחשבון Claude. אפשר להוסיף ב־Billing ב־console.anthropic.com.";
-    if (status === 429 || status === 529) return "Claude עמוס כרגע. נסי שוב בעוד דקה.";
-    if (e && e.code === "refusal") return "Claude לא הסכים לסדר את הטקסט הזה. אפשר למלא את השדות ידנית.";
-    if (e && e.code === "too_long") return "המתכון ארוך מדי לסידור אוטומטי. נסי להדביק חלק ממנו.";
-    if (e instanceof TypeError || /network|fetch/i.test(msg)) return "אין חיבור לאינטרנט. נסי שוב כשיש קליטה.";
-    return "הסידור לא הצליח. אפשר לנסות שוב או למלא את השדות ידנית.";
-  }
-
   function fillRecipeForm(r) {
     const set = (id, v) => { const el = $(id); if (el && v != null) el.value = Array.isArray(v) ? v.join("\n") : v; };
     if (r.title) set("f-title", r.title);
@@ -1593,23 +1513,12 @@ Write everything in Hebrew. Keep every amount, temperature and time exactly as t
     }
   }
 
-  async function aiFill(btn) {
+  function aiFill() {
     const text = ($("f-paste").value || "").trim();
-    const shot = $("f-shot"), file = shot && shot.files && shot.files[0];
     const st = $("ai-status");
-    if (!text && !file) { st.textContent = claudeKey ? "הדביקי מתכון או צרפי צילום מסך." : "הדביקי קודם את המתכון."; return; }
-    if (!claudeKey) {
-      fillRecipeForm(parseRecipeText(text));
-      st.textContent = "סידרתי לפי הכותרות והשורות. עברי על השדות ותקני מה שצריך.";
-      return;
-    }
-    btn.disabled = true; st.textContent = "Claude מסדר את המתכון…";
-    try {
-      fillRecipeForm(await claudeRecipe(text, file));
-      st.textContent = "מוכן! עברי על השדות, ואם הכול נכון, שמרי.";
-    } catch (e) {
-      st.textContent = claudeErrorText(e);
-    } finally { btn.disabled = false; }
+    if (!text) { st.textContent = "הדביקי קודם את המתכון."; return; }
+    fillRecipeForm(parseRecipeText(text));
+    st.textContent = "סידרתי לפי הכותרות והשורות. עברי על השדות ותקני מה שצריך.";
   }
 
   // ---- saving and deleting through GitHub
@@ -1731,18 +1640,8 @@ Write everything in Hebrew. Keep every amount, temperature and time exactly as t
       const b = e.target.closest("[data-sheet]"); if (!b) return;
       if (b.dataset.sheet === "close") closeSheet();
       else if (b.dataset.sheet === "delete") deleteStaticRecipe(b);
-      else if (b.dataset.sheet === "ai-fill") aiFill(b);
-      else if (b.dataset.sheet === "claude-save") {
-        const k = ($("f-claude-key").value || "").trim();
-        if (!/^sk-ant-/.test(k)) { $("ai-status").textContent = "זה לא נראה כמו מפתח של Claude. הוא מתחיל ב־sk-ant-."; return; }
-        claudeKey = k;
-        try { localStorage.setItem("foodli-claude-key", k); } catch (err) { /* ignore */ }
-        swapAiBox("Claude מחובר. עכשיו אפשר להדביק טקסט או לצרף צילום מסך.");
-      } else if (b.dataset.sheet === "claude-forget") {
-        claudeKey = null;
-        try { localStorage.removeItem("foodli-claude-key"); } catch (err) { /* ignore */ }
-        swapAiBox("Claude נותק מהטלפון הזה.");
-      } else if (b.dataset.sheet === "gh-disconnect") {
+      else if (b.dataset.sheet === "ai-fill") aiFill();
+      else if (b.dataset.sheet === "gh-disconnect") {
         ghToken = null;
         try { localStorage.removeItem("foodli-gh-token"); } catch (err) { /* ignore */ }
         setPhotoNote(); closeSheet(); render(current); applyPhotos();
@@ -1758,19 +1657,8 @@ Write everything in Hebrew. Keep every amount, temperature and time exactly as t
         const isNew = e.target.value === "__new";
         $("f-newcat-wrap").hidden = !isNew;
         if (isNew) $("f-newcat").focus();
-      } else if (e.target.id === "f-shot") {
-        const f = e.target.files && e.target.files[0];
-        $("f-shot-name").textContent = f ? "צורף צילום מסך" : "";
       }
     });
-    // redraw only the paste box, keeping whatever is already typed in the form
-    function swapAiBox(msg) {
-      const box = document.querySelector(".ai-box"); if (!box) return;
-      const pasted = $("f-paste").value;
-      const tmp = document.createElement("div"); tmp.innerHTML = aiBoxHTML();
-      box.replaceWith(tmp.firstElementChild);
-      $("f-paste").value = pasted; $("ai-status").textContent = msg;
-    }
   }
 
   // ---------- events ----------
