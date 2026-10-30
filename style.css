@@ -365,6 +365,16 @@ body::before {
 .share-photos-link { align-self: center; font-size: 0.9rem; margin-top: -8px; }
 .how-to { margin: 0; padding-inline-start: 22px; display: flex; flex-direction: column; gap: 6px; }
 .how-to a { color: var(--c-ink); font-weight: 700; }
+.ai-box { display: flex; flex-direction: column; gap: 10px; background: var(--c-tint); border: 2px dashed var(--c); border-radius: 16px; padding: 14px 16px; }
+.ai-box .sticker-btn { align-self: flex-start; }
+.ai-title { font-family: var(--f-display); font-size: 1.9rem; line-height: 1; }
+.ai-box textarea { width: 100%; font: inherit; color: var(--ink); background: var(--page); border: 2px solid var(--ink); border-radius: 12px; padding: 10px 12px; resize: vertical; }
+.ai-status { font-weight: 700; color: var(--c-ink); }
+.ai-status:empty { display: none; }
+.shot-name { font-size: 0.85rem; color: var(--muted); }
+.claude-key summary { cursor: pointer; font-weight: 700; color: var(--c-ink); }
+.claude-key[open] { display: flex; flex-direction: column; gap: 10px; }
+.claude-key .field input { width: 100%; }
 .who-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 .auth-title { font-size: clamp(4rem, 20vw, 5.6rem); }
 .auth-form, .editor { display: flex; flex-direction: column; gap: 14px; }

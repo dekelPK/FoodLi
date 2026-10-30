@@ -41,7 +41,7 @@
   const stage = $("stage");
   let me = null;               // signed-in user (shared books only)
   let openBookId = null;
-  const isOwn = () => !!(CLOUD_CONFIG && me && openBookId === me.uid);
+  const isOwn = () => CLOUD_CONFIG ? !!(me && openBookId === me.uid) : canEditHere();
   const countLabel = n => n === 1 ? "מתכון אחד" : `${n} מתכונים`;
   const isSub = l => String(l).trim().endsWith(":");
   const countIngredients = r => (r.ingredients || []).filter(l => !isSub(l)).length;
@@ -70,6 +70,7 @@
     { id: "main", book: window.BOOK || { title: "FoodLi", subtitle: "ספר המתכונים שלי" }, recipes: window.RECIPES },
     { id: "friend", book: window.FRIEND_BOOK, recipes: window.FRIEND_RECIPES }
   ].filter(b => b.book && Array.isArray(b.recipes));
+  staticBooks.forEach(b => { b.builtin = b.recipes; });
   const multiBook = staticBooks.length > 1;
   const hasShelf = !!CLOUD_CONFIG || multiBook;
   let myBookId = null;         // which built-in book belongs to whoever uses this phone
@@ -132,9 +133,8 @@
 
   async function loadSharedPhotos() {
     try {
-      const res = await fetch("photos.json?t=" + Date.now(), { cache: "no-store" });
-      if (!res.ok) return;
-      const map = await res.json();
+      const map = await readSiteJson("photos.json");
+      if (!map) return;
       Object.keys(sharedPhotos).forEach(k => delete sharedPhotos[k]);
       Object.entries(map || {}).forEach(([id, v]) => {
         if (v && typeof v.path === "string" && /^images\/[\w./-]+$/.test(v.path)) sharedPhotos[id] = { path: v.path, ts: Number(v.ts) || 0 };
@@ -153,15 +153,31 @@
   const toB64 = str => btoa(unescape(encodeURIComponent(str)));
   const fromB64 = b64 => decodeURIComponent(escape(atob(String(b64).replace(/\n/g, ""))));
 
-  // read photos.json, change it, write it back (retrying if someone else wrote in between)
-  async function ghUpdatePhotoMap(change, message) {
+  // A JSON file of the site. With a key it is read straight from GitHub, so a change made a
+  // moment ago shows up before the site has republished; without one, from the site itself.
+  async function readSiteJson(path) {
+    if (ghToken) {
+      try {
+        const g = await ghApi(`/contents/${path}?ref=${GH_BRANCH}`, { cache: "no-store" });
+        if (g.ok) return JSON.parse(fromB64((await g.json()).content)) || {};
+        if (g.status === 404) return {};
+      } catch (e) { /* fall back to the site */ }
+    }
+    const res = await fetch(path + "?t=" + Date.now(), { cache: "no-store" });
+    return res.ok ? await res.json() : null;
+  }
+
+  const ghUpdatePhotoMap = (change, message) => ghUpdateJsonFile("photos.json", change, message);
+
+  // read a JSON file, change it, write it back (retrying if someone else wrote in between)
+  async function ghUpdateJsonFile(path, change, message) {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const g = await ghApi(`/contents/photos.json?ref=${GH_BRANCH}`);
+      const g = await ghApi(`/contents/${path}?ref=${GH_BRANCH}`, { cache: "no-store" });
       let map = {}, sha;
       if (g.ok) { const j = await g.json(); sha = j.sha; try { map = JSON.parse(fromB64(j.content)) || {}; } catch (e) { map = {}; } }
       else if (g.status !== 404) throw ghError(g.status);
       change(map);
-      const p = await ghApi("/contents/photos.json", { method: "PUT", body: JSON.stringify({ message, branch: GH_BRANCH, content: toB64(JSON.stringify(map, null, 2) + "\n"), ...(sha ? { sha } : {}) }) });
+      const p = await ghApi(`/contents/${path}`, { method: "PUT", body: JSON.stringify({ message, branch: GH_BRANCH, content: toB64(JSON.stringify(map, null, 2) + "\n"), ...(sha ? { sha } : {}) }) });
       if (p.ok) return map;
       if (p.status !== 409 && p.status !== 422) throw ghError(p.status);
     }
@@ -200,7 +216,7 @@
 
   async function initLocalStore() {
     const fromSite = !CLOUD_CONFIG && staticBooks.length > 0;
-    if (fromSite) loadSharedPhotos();
+    if (fromSite) { loadSharedPhotos(); loadAddedRecipes(); }
     try {
       const d = await idb();
       const tx = d.transaction("photos", "readonly").objectStore("photos");
@@ -389,7 +405,7 @@
       return isOwn()
         ? `<div class="empty-book"><p class="empty">הספר עוד ריק. בואי נוסיף את המתכון הראשון!</p>
             <button class="sticker-btn primary" type="button" data-action="new-recipe">+ מתכון חדש</button>
-            ${Array.isArray(window.RECIPES) && window.RECIPES.length ? `<button class="sticker-btn small" type="button" data-action="import">להעתיק לכאן את ${window.RECIPES.length} המתכונים של FoodLi</button>` : ""}</div>`
+            ${CLOUD_CONFIG && Array.isArray(window.RECIPES) && window.RECIPES.length ? `<button class="sticker-btn small" type="button" data-action="import">להעתיק לכאן את ${window.RECIPES.length} המתכונים של FoodLi</button>` : ""}</div>`
         : `<p class="empty">עוד אין כאן מתכונים.</p>`;
     }
     return parts.length ? parts.join("") : `<p class="empty">לא מצאתי מתכון כזה. אפשר לנסות מילה אחרת.</p>`;
@@ -408,7 +424,7 @@
       </div>
       ${isOwn() ? `<div class="owner-actions">
         <button class="sticker-btn primary" type="button" data-action="new-recipe">+ מתכון חדש</button>
-        <button class="sticker-btn small" type="button" data-action="book-settings">שם וצבע הספר</button>
+        ${CLOUD_CONFIG ? `<button class="sticker-btn small" type="button" data-action="book-settings">שם וצבע הספר</button>` : ""}
       </div>` : ""}
       <p class="note-hand">בתוך מתכון אפשר לסמן מצרכים ושלבים, ${isOwn() || !CLOUD_CONFIG ? "להוסיף תמונה " : ""}ולשתף לסטורי</p>
     </div>`;
@@ -1100,6 +1116,7 @@
     const cat = r ? r.category : (activeChapter || chapterOrder[0]);
     return `<form class="editor" id="recipe-form" novalidate>
       <h2 class="display editor-title">${r ? "עריכת מתכון" : "מתכון חדש"}</h2>
+      ${!r && !CLOUD_CONFIG ? aiBoxHTML() : ""}
       <label class="field"><span>שם המתכון</span><input id="f-title" name="title" type="text" value="${val(r && r.title)}" required></label>
       <div class="field-row">
         <label class="field"><span>פרק</span><select id="f-category" name="category">
@@ -1155,16 +1172,17 @@
   const splitLines = v => String(v || "").split("\n").map(x => x.trim()).filter(Boolean);
   const plain = r => { const { _i, ...rest } = r; return rest; };
 
-  async function saveRecipeForm(form) {
+  // checks the recipe form and returns {recipe, old}, or null after showing what is missing
+  function readRecipeForm(form) {
     const f = new FormData(form);
     const err = $("recipe-error");
     const title = String(f.get("title") || "").trim();
     let category = String(f.get("category") || "");
     if (category === "__new") category = String(f.get("newCategory") || "").trim();
-    if (!title) { err.textContent = "צריך לתת למתכון שם."; $("f-title").focus(); return; }
-    if (!category) { err.textContent = "צריך לבחור פרק או לכתוב שם לפרק חדש."; return; }
+    if (!title) { err.textContent = "צריך לתת למתכון שם."; $("f-title").focus(); return null; }
+    if (!category) { err.textContent = "צריך לבחור פרק או לכתוב שם לפרק חדש."; return null; }
     const link = String(f.get("link") || "").trim();
-    if (link && !/^https:\/\//.test(link)) { err.textContent = "הקישור צריך להתחיל ב־https://"; return; }
+    if (link && !/^https:\/\//.test(link)) { err.textContent = "הקישור צריך להתחיל ב־https://"; return null; }
     const old = editingId ? recipes.find(x => x.id === editingId) : null;
     const recipe = {
       id: old ? old.id : undefined,
@@ -1180,7 +1198,16 @@
       order: old ? old.order : undefined,
       createdAt: old ? old.createdAt : undefined
     };
-    const btn = form.querySelector('[type="submit"]'); btn.disabled = true; err.textContent = "";
+    err.textContent = "";
+    return { recipe, old };
+  }
+
+  async function saveRecipeForm(form) {
+    const read = readRecipeForm(form);
+    if (!read) return;
+    const { recipe } = read;
+    const category = recipe.category, err = $("recipe-error");
+    const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
     try {
       const id = await cloud.saveRecipe(me.uid, recipe);
       const list = recipes.filter(x => x.id !== id).map(plain).concat({ ...recipe, id });
@@ -1387,6 +1414,258 @@
 
 
   // ======================================================
+  //  Recipes added or edited from the app (website, on a phone connected with a GitHub key)
+  //  added-recipes.json: { bookId: { recipes: { id: recipe }, deleted: [ids] } }
+  // ======================================================
+  let addedRecipes = {};
+  let claudeKey = null;
+  try { claudeKey = localStorage.getItem("foodli-claude-key"); } catch (e) { /* ignore */ }
+
+  // editing is for a connected phone, in the book that belongs to whoever uses it
+  function canEditHere() {
+    return !CLOUD_CONFIG && !window.claude && !!ghToken && view === "book" && (!multiBook || openBookId === myBookId);
+  }
+
+  // the file is written by people using the app: keep only known fields of the right type
+  const str = v => typeof v === "string" && v.trim() ? v.slice(0, 4000) : undefined;
+  const strs = v => Array.isArray(v) ? v.filter(x => typeof x === "string" && x.trim()).map(x => x.slice(0, 2000)) : [];
+  function cleanRecipe(r) {
+    return {
+      title: str(r.title) || "מתכון", category: str(r.category) || "", time: str(r.time), servings: str(r.servings),
+      intro: str(r.intro), link: str(r.link), linkLabel: str(r.linkLabel), source: str(r.source),
+      ingredients: strs(r.ingredients), steps: strs(r.steps), tips: strs(r.tips)
+    };
+  }
+
+  function mergeBooks() {
+    staticBooks.forEach(b => {
+      const extra = addedRecipes && addedRecipes[b.id] || {};
+      const deleted = new Set(Array.isArray(extra.deleted) ? extra.deleted : []);
+      const edits = extra.recipes && typeof extra.recipes === "object" ? extra.recipes : {};
+      const list = b.builtin.filter(r => !deleted.has(r.id))
+        .map(r => edits[r.id] ? { ...cleanRecipe(edits[r.id]), id: r.id, photo: r.photo } : r);
+      Object.entries(edits)
+        .filter(([id, r]) => r && typeof r === "object" && !deleted.has(id) && !b.builtin.some(x => x.id === id))
+        .sort((a, c) => (a[1].createdAt || 0) - (c[1].createdAt || 0))
+        .forEach(([id, r]) => list.push({ ...cleanRecipe(r), id }));
+      b.recipes = list;
+    });
+  }
+
+  // re-merge and redraw, staying on the same recipe
+  function refreshBooks() {
+    mergeBooks();
+    if (view === "book" && openBookId) {
+      const u = units[current], keepId = u && u.r ? u.r.id : null, keepToc = u && u.type === "toc";
+      const b = staticBooks.find(x => x.id === openBookId);
+      setBook(b.book, b.recipes, true);
+      const k = keepId ? units.findIndex(x => x.r && x.r.id === keepId) : -1;
+      current = k >= 0 ? k : keepToc ? 1 : Math.min(current, units.length - 1);
+      render(current); setHash();
+    } else if (view === "shelf") render(0);
+    applyPhotos();
+  }
+
+  async function loadAddedRecipes() {
+    try { const map = await readSiteJson("added-recipes.json"); if (map) { addedRecipes = map; refreshBooks(); } }
+    catch (e) { /* offline: keep the built-in recipes */ }
+  }
+
+  function aiBoxHTML() {
+    return `<div class="ai-box">
+      <span class="ai-title">יש לך מתכון מוכן?</span>
+      <p class="modal-hint">הדביקי אותו כאן${claudeKey ? " או צרפי צילום מסך" : ""}, והשדות למטה יתמלאו לבד.</p>
+      <textarea id="f-paste" rows="5" placeholder="הדביקי כאן את המתכון…"></textarea>
+      ${claudeKey ? `<label class="sticker-btn small shot-btn"><input type="file" id="f-shot" accept="image/*" hidden>צירוף צילום מסך</label><span class="shot-name" id="f-shot-name"></span>` : ""}
+      <button class="sticker-btn primary" type="button" data-sheet="ai-fill">${claudeKey ? "Claude, סדר לי את המתכון" : "סידור אוטומטי"}</button>
+      <p class="ai-status" id="ai-status" role="status"></p>
+      <details class="claude-key">
+        <summary>${claudeKey ? "Claude מחובר בטלפון הזה" : "רוצה ש־Claude יסדר, גם מצילום מסך?"}</summary>
+        ${claudeKey
+          ? `<button class="sticker-btn small danger" type="button" data-sheet="claude-forget">ניתוק Claude</button>`
+          : `<ol class="how-to">
+              <li>נכנסים ל־<a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> ונרשמים. זה חשבון נפרד מהמנוי של Claude.</li>
+              <li>ב־<b>Billing</b> מוסיפים קרדיט. 5 דולר מספיקים להרבה מאוד מתכונים.</li>
+              <li>ב־<b>API Keys</b> לוחצים <b>Create Key</b>, מעתיקים ומדביקים כאן.</li>
+            </ol>
+            <label class="field"><span>מפתח Claude</span><input id="f-claude-key" type="password" dir="ltr" autocomplete="off" placeholder="sk-ant-…"></label>
+            <button class="sticker-btn small" type="button" data-sheet="claude-save">שמירת המפתח</button>`}
+      </details>
+    </div>`;
+  }
+
+  // ---- sorting a pasted recipe without Claude: by headings and lines
+  function parseRecipeText(text) {
+    const lines = text.split(/\r?\n/).map(l => l.replace(/^[\s•\-–*·●▪️✨❤️]+/u, "").trim()).filter(Boolean);
+    const out = { title: "", ingredients: [], steps: [], tips: [] };
+    let mode = "start";
+    for (const l of lines) {
+      if (/^(מצרכים|רכיבים|חומרים|מה צריך)/.test(l)) { mode = "ing"; continue; }
+      if (/^(אופן ה?הכנה|הוראות הכנה|הוראות|הכנה|איך מכינים)/.test(l)) { mode = "steps"; continue; }
+      if (/^(טיפים|טיפ|הערות|הערה)(?=[\s:–-]|$)/.test(l)) { const t = l.replace(/^(טיפים|טיפ|הערות|הערה)\s*[:\-–]?\s*/, ""); if (t) out.tips.push(t); mode = "tips"; continue; }
+      if (mode === "start") {
+        if (!out.title) { out.title = l.replace(/[\s:–-]+$/, ""); continue; }
+        mode = /^[\d½¼¾⅓]/.test(l) ? "ing" : "steps";
+      }
+      if (mode === "ing") out.ingredients.push(l.replace(/\s*:\s*$/, ":"));
+      else if (mode === "steps") out.steps.push(l.replace(/^\d+\s*[.)]\s*/, ""));
+      else out.tips.push(l);
+    }
+    return out;
+  }
+
+  // ---- sorting with Claude (the key stays on this phone and is sent only to Anthropic)
+  const RECIPE_SCHEMA = {
+    type: "object", additionalProperties: false,
+    required: ["title", "category", "time", "servings", "intro", "ingredients", "steps", "tips"],
+    properties: {
+      title: { type: "string" }, category: { type: "string" }, time: { type: "string" }, servings: { type: "string" },
+      intro: { type: "string" },
+      ingredients: { type: "array", items: { type: "string" } },
+      steps: { type: "array", items: { type: "string" } },
+      tips: { type: "array", items: { type: "string" } }
+    }
+  };
+  const RECIPE_SYSTEM = `You turn a recipe into a clean card for a Hebrew family cookbook. The recipe comes as pasted text and/or a screenshot, usually Hebrew, often an Instagram caption.
+
+Write everything in Hebrew. Keep every amount, temperature and time exactly as the source gives it, and never invent amounts, ingredients or steps; if something is missing, leave it out.
+
+- title: the dish name only.
+- category: the best fitting chapter from the list you are given; only when none fits, a short new chapter name.
+- time, servings: short, only when stated or clearly adding up from stated times; otherwise an empty string.
+- intro: at most one short sentence worth keeping from the author; otherwise an empty string.
+- ingredients: one item per string, amount first, e.g. "2 כוסות קמח". When the recipe has parts (dough, sauce, filling, coating), start each part with a heading string ending in a colon, e.g. "לרוטב:".
+- steps: one action per step, in present-tense plural like "מערבבים", "מוסיפים". Split long paragraphs into separate steps. No numbering.
+- tips: the author's notes, substitutions and serving suggestions, one per string.
+- Leave out hashtags, emojis, greetings, requests to follow or tag, and the author's personal story.
+- Write number ranges with a plain hyphen, e.g. "2-3".`;
+
+  let AnthropicSDK = null;
+  async function claudeRecipe(text, file) {
+    if (!AnthropicSDK) AnthropicSDK = (await import("./vendor/anthropic-sdk-0.135.0.mjs")).default;
+    const client = new AnthropicSDK({ apiKey: claudeKey, dangerouslyAllowBrowser: true });
+    const content = [];
+    if (file) {
+      const jpeg = await shrinkImage(file, 1568, 0.85);
+      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await blobToDataURL(jpeg)).split(",")[1] } });
+    }
+    content.push({ type: "text", text: `${text ? "המתכון:\n" + text : "המתכון נמצא בצילום המסך."}\n\nהפרקים בספר: ${chapterOrder.join(", ")}` });
+    const params = {
+      model: "claude-opus-5-5", max_tokens: 16000, system: RECIPE_SYSTEM,
+      messages: [{ role: "user", content }],
+      output_config: { effort: "low", format: { type: "json_schema", schema: RECIPE_SCHEMA } }
+    };
+    let res;
+    try {
+      // if a safety check declines, the API retries on its recommended fallback model
+      res = await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" });
+    } catch (e) {
+      if (e && e.status === 400 && !/credit/i.test(e.message || "")) res = await client.messages.create(params);
+      else throw e;
+    }
+    if (res.stop_reason === "refusal") throw Object.assign(new Error("refusal"), { code: "refusal" });
+    if (res.stop_reason === "max_tokens") throw Object.assign(new Error("too long"), { code: "too_long" });
+    const block = res.content.find(b => b.type === "text");
+    if (!block) throw Object.assign(new Error("empty"), { code: "empty" });
+    return JSON.parse(block.text);
+  }
+
+  function claudeErrorText(e) {
+    const status = e && e.status, msg = (e && e.message) || "";
+    if (status === 401) return "המפתח של Claude לא עובד. בדקי שהעתקת את כולו, או צרי מפתח חדש.";
+    if (/credit/i.test(msg)) return "נגמר הקרדיט בחשבון Claude. אפשר להוסיף ב־Billing ב־console.anthropic.com.";
+    if (status === 429 || status === 529) return "Claude עמוס כרגע. נסי שוב בעוד דקה.";
+    if (e && e.code === "refusal") return "Claude לא הסכים לסדר את הטקסט הזה. אפשר למלא את השדות ידנית.";
+    if (e && e.code === "too_long") return "המתכון ארוך מדי לסידור אוטומטי. נסי להדביק חלק ממנו.";
+    if (e instanceof TypeError || /network|fetch/i.test(msg)) return "אין חיבור לאינטרנט. נסי שוב כשיש קליטה.";
+    return "הסידור לא הצליח. אפשר לנסות שוב או למלא את השדות ידנית.";
+  }
+
+  function fillRecipeForm(r) {
+    const set = (id, v) => { const el = $(id); if (el && v != null) el.value = Array.isArray(v) ? v.join("\n") : v; };
+    if (r.title) set("f-title", r.title);
+    set("f-time", r.time || ""); set("f-servings", r.servings || ""); set("f-intro", r.intro || "");
+    set("f-ingredients", r.ingredients || []); set("f-steps", r.steps || []); set("f-tips", r.tips || []);
+    const cat = String(r.category || "").trim(), sel = $("f-category");
+    if (cat && sel) {
+      if ([...sel.options].some(o => o.value === cat)) { sel.value = cat; $("f-newcat-wrap").hidden = true; }
+      else { sel.value = "__new"; $("f-newcat-wrap").hidden = false; set("f-newcat", cat); }
+    }
+  }
+
+  async function aiFill(btn) {
+    const text = ($("f-paste").value || "").trim();
+    const shot = $("f-shot"), file = shot && shot.files && shot.files[0];
+    const st = $("ai-status");
+    if (!text && !file) { st.textContent = claudeKey ? "הדביקי מתכון או צרפי צילום מסך." : "הדביקי קודם את המתכון."; return; }
+    if (!claudeKey) {
+      fillRecipeForm(parseRecipeText(text));
+      st.textContent = "סידרתי לפי הכותרות והשורות. עברי על השדות ותקני מה שצריך.";
+      return;
+    }
+    btn.disabled = true; st.textContent = "Claude מסדר את המתכון…";
+    try {
+      fillRecipeForm(await claudeRecipe(text, file));
+      st.textContent = "מוכן! עברי על השדות, ואם הכול נכון, שמרי.";
+    } catch (e) {
+      st.textContent = claudeErrorText(e);
+    } finally { btn.disabled = false; }
+  }
+
+  // ---- saving and deleting through GitHub
+  async function saveStaticRecipe(form) {
+    const read = readRecipeForm(form);
+    if (!read) return;
+    const { recipe, old } = read, err = $("recipe-error");
+    const bookId = openBookId || staticBooks[0].id;
+    const id = old ? old.id : `${bookId === "main" ? "" : bookId + "-"}r${Date.now().toString(36)}`;
+    const prev = ((addedRecipes[bookId] || {}).recipes || {})[id];
+    const record = JSON.parse(JSON.stringify({ ...cleanRecipe(recipe), createdAt: (prev && prev.createdAt) || Date.now(), updatedAt: Date.now() }));
+    const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
+    try {
+      addedRecipes = await ghUpdateJsonFile("added-recipes.json", map => {
+        const b = map[bookId] = map[bookId] || {};
+        b.recipes = b.recipes || {};
+        b.deleted = (b.deleted || []).filter(x => x !== id);
+        b.recipes[id] = record;
+      }, `מתכון: ${recipe.title}`);
+      closeSheet();
+      refreshBooks();
+      current = Math.max(0, units.findIndex(u => u.r && u.r.id === id));
+      render(current); setHash(); window.scrollTo({ top: 0 });
+      toast("המתכון נשמר. הוא יופיע אצל כולן תוך כדקה.");
+    } catch (e) {
+      btn.disabled = false;
+      err.textContent = e && e.code === "gh_auth" ? "המפתח לשיתוף לא עובד. אפשר לחבר מפתח חדש במדף." : "השמירה לא הצליחה. בדקי את החיבור לאינטרנט ונסי שוב.";
+    }
+  }
+
+  async function deleteStaticRecipe(btn) {
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "בטוחה? לחיצה נוספת תמחק"; return; }
+    const id = editingId, bookId = openBookId || staticBooks[0].id;
+    const b0 = staticBooks.find(x => x.id === bookId), builtin = !!(b0 && b0.builtin.some(r => r.id === id));
+    btn.disabled = true;
+    try {
+      addedRecipes = await ghUpdateJsonFile("added-recipes.json", map => {
+        const b = map[bookId] = map[bookId] || {};
+        b.recipes = b.recipes || {}; b.deleted = b.deleted || [];
+        delete b.recipes[id];
+        if (builtin && !b.deleted.includes(id)) b.deleted.push(id);
+      }, "מחיקת מתכון");
+      closeSheet();
+      current = 1; refreshBooks(); render(current); setHash();
+      toast("המתכון נמחק");
+    } catch (e) {
+      btn.disabled = false; $("recipe-error").textContent = "המחיקה לא הצליחה. נסי שוב.";
+    }
+  }
+
+  function openStaticEditor(id) {
+    editingId = id || null;
+    openSheet(recipeFormHTML(id ? recipes.find(x => x.id === id) : null), id ? "f-title" : "f-paste");
+  }
+
+  // ======================================================
   //  Connecting this phone so photos are shared with everyone (GitHub key)
   // ======================================================
   function ghConnectHTML() {
@@ -1438,6 +1717,9 @@
   }
 
   function handleSiteClick(e) {
+    const ed = e.target.closest("[data-edit]");
+    if (ed && canEditHere()) { openStaticEditor(ed.dataset.edit); return true; }
+    if (e.target.closest('[data-action="new-recipe"]') && canEditHere()) { openStaticEditor(null); return true; }
     if (!e.target.closest('[data-action="gh-connect"]')) return false;
     openSheet(ghConnectHTML(), ghToken ? null : "gh-token");
     return true;
@@ -1448,7 +1730,19 @@
       if (e.target.id === "sheet-modal") { closeSheet(); return; }
       const b = e.target.closest("[data-sheet]"); if (!b) return;
       if (b.dataset.sheet === "close") closeSheet();
-      else if (b.dataset.sheet === "gh-disconnect") {
+      else if (b.dataset.sheet === "delete") deleteStaticRecipe(b);
+      else if (b.dataset.sheet === "ai-fill") aiFill(b);
+      else if (b.dataset.sheet === "claude-save") {
+        const k = ($("f-claude-key").value || "").trim();
+        if (!/^sk-ant-/.test(k)) { $("ai-status").textContent = "זה לא נראה כמו מפתח של Claude. הוא מתחיל ב־sk-ant-."; return; }
+        claudeKey = k;
+        try { localStorage.setItem("foodli-claude-key", k); } catch (err) { /* ignore */ }
+        swapAiBox("Claude מחובר. עכשיו אפשר להדביק טקסט או לצרף צילום מסך.");
+      } else if (b.dataset.sheet === "claude-forget") {
+        claudeKey = null;
+        try { localStorage.removeItem("foodli-claude-key"); } catch (err) { /* ignore */ }
+        swapAiBox("Claude נותק מהטלפון הזה.");
+      } else if (b.dataset.sheet === "gh-disconnect") {
         ghToken = null;
         try { localStorage.removeItem("foodli-gh-token"); } catch (err) { /* ignore */ }
         setPhotoNote(); closeSheet(); render(current); applyPhotos();
@@ -1456,9 +1750,27 @@
       }
     });
     $("sheet-modal").addEventListener("submit", e => {
-      if (e.target.id !== "gh-form") return;
-      e.preventDefault(); connectGitHub(e.target);
+      if (e.target.id === "gh-form") { e.preventDefault(); connectGitHub(e.target); }
+      else if (e.target.id === "recipe-form") { e.preventDefault(); saveStaticRecipe(e.target); }
     });
+    $("sheet-modal").addEventListener("change", e => {
+      if (e.target.id === "f-category") {
+        const isNew = e.target.value === "__new";
+        $("f-newcat-wrap").hidden = !isNew;
+        if (isNew) $("f-newcat").focus();
+      } else if (e.target.id === "f-shot") {
+        const f = e.target.files && e.target.files[0];
+        $("f-shot-name").textContent = f ? "צורף צילום מסך" : "";
+      }
+    });
+    // redraw only the paste box, keeping whatever is already typed in the form
+    function swapAiBox(msg) {
+      const box = document.querySelector(".ai-box"); if (!box) return;
+      const pasted = $("f-paste").value;
+      const tmp = document.createElement("div"); tmp.innerHTML = aiBoxHTML();
+      box.replaceWith(tmp.firstElementChild);
+      $("f-paste").value = pasted; $("ai-status").textContent = msg;
+    }
   }
 
   // ---------- events ----------
